@@ -31,18 +31,19 @@ class LLMResponse(BaseModel):
     """Standardized LLM response."""
     content: str
     model: str
-    usage: Optional[Dict[str, int]] = None
+    usage: Optional[Dict[str, Any]] = None  # Changed from int to Any to support nested dicts
     cost: float = 0.0
 
 
 class BaseLLMClient:
     """Base class for LLM clients with retry and error handling."""
 
-    def __init__(self, api_key: str, base_url: str, model_id: str, price_per_token: float):
+    def __init__(self, api_key: str, base_url: str, model_id: str, price_per_token: float, auth_header_type: str = "bearer"):
         self.api_key = api_key
         self.base_url = base_url
         self.model_id = model_id
         self.price_per_token = price_per_token
+        self.auth_header_type = auth_header_type  # "bearer" or "x-api-key"
         self.client = httpx.AsyncClient(timeout=60.0)
         self.max_retries = 3
 
@@ -52,10 +53,19 @@ class BaseLLMClient:
 
     async def _request_with_retry(self, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Make an HTTP POST request with retry logic."""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        # Set auth header based on provider type
+        if self.auth_header_type == "x-api-key":
+            headers = {
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            }
+        else:  # bearer token (default)
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+        
         url = f"{self.base_url}{endpoint}"
         last_exception = None
 
@@ -141,6 +151,7 @@ class AnthropicClient(BaseLLMClient):
             base_url="https://api.anthropic.com",
             model_id=settings.strong_model_id,
             price_per_token=CLAUDE_OPUS_PRICE_PER_TOKEN,
+            auth_header_type="x-api-key",  # Anthropic uses x-api-key header
         )
 
     async def chat_completion(self, messages: list, **kwargs) -> LLMResponse:
@@ -169,10 +180,14 @@ class AnthropicClient(BaseLLMClient):
         payload = {
             "model": self.model_id,
             "messages": conversation,
-            "system": final_system_prompt,
             "max_tokens": 4096,
             "stream": False,
         }
+        
+        # Only add system if it's not None
+        if final_system_prompt:
+            payload["system"] = final_system_prompt
+        
         payload.update(kwargs)
 
         data = await self._request_with_retry("/v1/messages", payload)
