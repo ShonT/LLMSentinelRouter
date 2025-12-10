@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  sentinelrouter:
+    build: .
+    container_name: sentinelrouter
+    ports:
+      - "8000:8000"
+    environment:
+      # Required API keys (must be provided via .env file or shell)
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # Core configuration (with defaults)
+      - WEAK_MODEL_ID=${WEAK_MODEL_ID:-deepseek-chat}
+      - STRONG_MODEL_ID=${STRONG_MODEL_ID:-claude-3-haiku-20240307}
+      - MAX_COST_PER_SESSION=${MAX_COST_PER_SESSION:-10.0}
+      - INITIAL_THRESHOLD=${INITIAL_THRESHOLD:-0.7}
+      - ESCALATION_RATE_LIMIT=${ESCALATION_RATE_LIMIT:-0.05}
+      - COMPLEXITY_THRESHOLD=${COMPLEXITY_THRESHOLD:-0.5}
+      - TARGET_ESCALATION_RATE=${TARGET_ESCALATION_RATE:-0.05}
+      - ROLLING_WINDOW_SIZE=${ROLLING_WINDOW_SIZE:-20}
+      # Database and logging
+      - DATABASE_URL=sqlite:////home/sentinel/app/data/sentinelrouter.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=/home/sentinel/app/logs/sentinelrouter.log
+      # Feature toggles
+      - ENABLE_BUDGET_KILLSWITCH=${ENABLE_BUDGET_KILLSWITCH:-true}
+      - ENABLE_CYCLE_DETECTION=${ENABLE_CYCLE_DETECTION:-true}
+      - ENABLE_DYNAMIC_THRESHOLD=${ENABLE_DYNAMIC_THRESHOLD:-true}
+      # Server
+      - HOST=0.0.0.0
+      - PORT=8000
+      - WORKERS=${WORKERS:-2}
+    volumes:
+      # Persistent storage for database and logs (using named volumes for better permission handling)
+      - sentinelrouter_data:/home/sentinel/app/data
+      - sentinelrouter_logs:/home/sentinel/app/logs
+    restart: unless-stopped
+    # Resource limits as per design (1 CPU, 512MB RAM)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+    # Health check (using httpx which is in dependencies)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=2.0)"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  sentinelrouter_data:
+  sentinelrouter_logs:

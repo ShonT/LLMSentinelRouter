@@ -1,0 +1,370 @@
+"""
+Unit tests for LLM Clients (DeepSeek and Anthropic)
+Tests the API client implementations and retry logic.
+"""
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+import httpx
+
+from sentinelrouter.sentinelrouter.clients import (
+    DeepSeekClient,
+    AnthropicClient,
+    LLMResponse,
+    LLMClientError,
+    get_deepseek_client,
+    get_anthropic_client,
+    close_clients
+)
+
+
+class TestLLMResponse:
+    """Tests for LLMResponse dataclass."""
+    
+    def test_llm_response_creation(self):
+        """Test creating an LLMResponse."""
+        response = LLMResponse(
+            content="Test response",
+            model="test-model",
+            usage={"total_tokens": 100},
+            cost=0.001
+        )
+        
+        assert response.content == "Test response"
+        assert response.model == "test-model"
+        assert response.usage["total_tokens"] == 100
+        assert response.cost == 0.001
+    
+    def test_llm_response_optional_fields(self):
+        """Test LLMResponse with optional fields."""
+        response = LLMResponse(
+            content="Test",
+            model="model",
+            usage=None,
+            cost=0.0
+        )
+        
+        assert response.usage is None
+
+
+class TestDeepSeekClient:
+    """Tests for DeepSeek API client."""
+    
+    @pytest.fixture
+    async def deepseek_client(self):
+        """Create a DeepSeek client for testing."""
+        # DeepSeekClient is a singleton, so we mock it
+        client = DeepSeekClient()
+        # Mock the HTTP client to avoid real API calls
+        client.client = MagicMock()
+        return client
+    
+    @pytest.mark.asyncio
+    async def test_chat_completion_success(self, deepseek_client):
+        """Test successful chat completion."""
+        mock_response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Hello, world!"
+                    }
+                }
+            ],
+            "usage": {
+                "total_tokens": 10
+            }
+        }
+        
+        with patch.object(deepseek_client, '_request_with_retry', new=AsyncMock(return_value=mock_response)):
+            messages = [{"role": "user", "content": "Hi"}]
+            response = await deepseek_client.chat_completion(messages)
+            
+            assert response.content == "Hello, world!"
+            assert response.model == "deepseek-chat"
+            assert response.usage["total_tokens"] == 10
+            assert response.cost > 0
+    
+    @pytest.mark.asyncio
+    async def test_chat_completion_with_system_message(self, deepseek_client):
+        """Test chat completion with system message."""
+        mock_response = {
+            "choices": [{"message": {"content": "Response"}}],
+            "usage": {"total_tokens": 5}
+        }
+        
+        with patch.object(deepseek_client, '_request_with_retry', new=AsyncMock(return_value=mock_response)):
+            messages = [
+                {"role": "system", "content": "You are helpful"},
+                {"role": "user", "content": "Hi"}
+            ]
+            response = await deepseek_client.chat_completion(messages)
+            
+            assert response.content == "Response"
+    
+    @pytest.mark.asyncio
+    async def test_chat_completion_empty_response(self, deepseek_client):
+        """Test handling of empty response."""
+        mock_response = {
+            "choices": [],
+            "usage": {"total_tokens": 0}
+        }
+        
+        with patch.object(deepseek_client, '_request_with_retry', new=AsyncMock(return_value=mock_response)):
+            messages = [{"role": "user", "content": "Hi"}]
+            
+            with pytest.raises((LLMClientError, KeyError, IndexError)):
+                await deepseek_client.chat_completion(messages)
+    
+    @pytest.mark.asyncio
+    async def test_chat_completion_no_usage(self, deepseek_client):
+        """Test handling response without usage information."""
+        mock_response = {
+            "choices": [{"message": {"content": "Response"}}],
+            "usage": None
+        }
+        
+        with patch.object(deepseek_client, '_request_with_retry', new=AsyncMock(return_value=mock_response)):
+            messages = [{"role": "user", "content": "Hi"}]
+            response = await deepseek_client.chat_completion(messages)
+            
+            assert response.content == "Response"
+            assert response.cost == 0  # No tokens = 0 cost
+    
+    @pytest.mark.asyncio
+    async def test_cost_calculation(self, deepseek_client):
+        """Test cost calculation based on tokens."""
+        mock_response = {
+            "choices": [{"message": {"content": "Response"}}],
+            "usage": {"total_tokens": 1000}
+        }
+        
+        with patch.object(deepseek_client, '_request_with_retry', new=AsyncMock(return_value=mock_response)):
+            messages = [{"role": "user", "content": "Hi"}]
+            response = await deepseek_client.chat_completion(messages)
+            
+            expected_cost = 1000 * deepseek_client.price_per_token
+            assert response.cost == expected_cost
+    
+    @pytest.mark.asyncio
+    async def test_retry_on_rate_limit(self, deepseek_client):
+        """Test retry logic on rate limit (429)."""
+        mock_error = httpx.HTTPStatusError(
+            "Rate limit",
+            request=MagicMock(),
+            response=MagicMock(status_code=429)
+        )
+        
+        mock_success = {
+            "choices": [{"message": {"content": "Success after retry"}}],
+            "usage": {"total_tokens": 10}
+        }
+        
+        # First call fails, second succeeds
+        with patch.object(
+            deepseek_client.client,
+            'post',
+            new=AsyncMock(side_effect=[mock_error, MagicMock(json=AsyncMock(return_value=mock_success))])
+        ):
+            with patch('asyncio.sleep', new=AsyncMock()):  # Skip actual sleep
+                messages = [{"role": "user", "content": "Hi"}]
+                response = await deepseek_client.chat_completion(messages)
+                
+                assert response.content == "Success after retry"
+    
+    @pytest.mark.asyncio
+    async def test_retry_exhaustion(self, deepseek_client):
+        """Test that retries eventually fail."""
+        mock_error = httpx.HTTPStatusError(
+            "Rate limit",
+            request=MagicMock(),
+            response=MagicMock(status_code=429)
+        )
+        
+        with patch.object(
+            deepseek_client.client,
+            'post',
+            new=AsyncMock(side_effect=mock_error)
+        ):
+            with patch('asyncio.sleep', new=AsyncMock()):
+                messages = [{"role": "user", "content": "Hi"}]
+                
+                with pytest.raises(LLMClientError):
+                    await deepseek_client.chat_completion(messages)
+
+
+class TestAnthropicClient:
+    """Tests for Anthropic API client."""
+    
+    @pytest.fixture
+    def anthropic_client(self):
+        """Create an Anthropic client for testing."""
+        return AnthropicClient(
+            api_key="test_api_key",
+            model_id="claude-3-haiku-20240307"
+        )
+    
+    @pytest.mark.asyncio
+    async def test_chat_completion_success(self, anthropic_client):
+        """Test successful chat completion."""
+        mock_response = {
+            "content": [{"text": "Hello from Claude!"}],
+            "usage": {
+                "input_tokens": 5,
+                "output_tokens": 5
+            }
+        }
+        
+        with patch.object(anthropic_client, '_request_with_retry', new=AsyncMock(return_value=mock_response)):
+            messages = [{"role": "user", "content": "Hi"}]
+            response = await anthropic_client.chat_completion(messages)
+            
+            assert response.content == "Hello from Claude!"
+            assert response.model == "claude-3-haiku-20240307"
+            assert response.usage["input_tokens"] == 5
+            assert response.cost > 0
+    
+    @pytest.mark.asyncio
+    async def test_system_message_handling(self, anthropic_client):
+        """Test that system messages are properly handled."""
+        mock_response = {
+            "content": [{"text": "Response"}],
+            "usage": {"input_tokens": 5, "output_tokens": 5}
+        }
+        
+        with patch.object(anthropic_client, '_request_with_retry', new=AsyncMock(return_value=mock_response)) as mock_request:
+            messages = [
+                {"role": "system", "content": "Be helpful"},
+                {"role": "user", "content": "Hi"}
+            ]
+            response = await anthropic_client.chat_completion(messages)
+            
+            # Check that system message was passed correctly
+            call_args = mock_request.call_args
+            assert "system" in call_args[0][1]  # Second arg should be payload
+    
+    @pytest.mark.asyncio
+    async def test_multiple_system_messages(self, anthropic_client):
+        """Test that multiple system messages are concatenated."""
+        mock_response = {
+            "content": [{"text": "Response"}],
+            "usage": {"input_tokens": 5, "output_tokens": 5}
+        }
+        
+        with patch.object(anthropic_client, '_request_with_retry', new=AsyncMock(return_value=mock_response)) as mock_request:
+            messages = [
+                {"role": "system", "content": "Be helpful"},
+                {"role": "system", "content": "Be concise"},
+                {"role": "user", "content": "Hi"}
+            ]
+            response = await anthropic_client.chat_completion(messages)
+            
+            # System messages should be concatenated
+            call_args = mock_request.call_args
+            payload = call_args[0][1]
+            assert "Be helpful" in payload["system"]
+            assert "Be concise" in payload["system"]
+    
+    @pytest.mark.asyncio
+    async def test_no_system_message(self, anthropic_client):
+        """Test chat completion without system message."""
+        mock_response = {
+            "content": [{"text": "Response"}],
+            "usage": {"input_tokens": 5, "output_tokens": 5}
+        }
+        
+        with patch.object(anthropic_client, '_request_with_retry', new=AsyncMock(return_value=mock_response)):
+            messages = [{"role": "user", "content": "Hi"}]
+            response = await anthropic_client.chat_completion(messages)
+            
+            assert response.content == "Response"
+    
+    @pytest.mark.asyncio
+    async def test_cost_calculation_anthropic(self, anthropic_client):
+        """Test cost calculation for Anthropic."""
+        mock_response = {
+            "content": [{"text": "Response"}],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50
+            }
+        }
+        
+        with patch.object(anthropic_client, '_request_with_retry', new=AsyncMock(return_value=mock_response)):
+            messages = [{"role": "user", "content": "Hi"}]
+            response = await anthropic_client.chat_completion(messages)
+            
+            expected_cost = 150 * anthropic_client.price_per_token
+            assert response.cost == expected_cost
+    
+    @pytest.mark.asyncio
+    async def test_conversation_history(self, anthropic_client):
+        """Test handling of conversation history."""
+        mock_response = {
+            "content": [{"text": "Response"}],
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        }
+        
+        with patch.object(anthropic_client, '_request_with_retry', new=AsyncMock(return_value=mock_response)):
+            messages = [
+                {"role": "user", "content": "First message"},
+                {"role": "assistant", "content": "First response"},
+                {"role": "user", "content": "Second message"}
+            ]
+            response = await anthropic_client.chat_completion(messages)
+            
+            assert response.content == "Response"
+
+
+class TestClientSingletons:
+    """Tests for client singleton pattern."""
+    
+    @pytest.mark.asyncio
+    async def test_get_deepseek_client_singleton(self):
+        """Test that get_deepseek_client returns singleton."""
+        client1 = await get_deepseek_client()
+        client2 = await get_deepseek_client()
+        
+        assert client1 is client2
+    
+    @pytest.mark.asyncio
+    async def test_get_anthropic_client_singleton(self):
+        """Test that get_anthropic_client returns singleton."""
+        client1 = await get_anthropic_client()
+        client2 = await get_anthropic_client()
+        
+        assert client1 is client2
+    
+    @pytest.mark.asyncio
+    async def test_close_clients(self):
+        """Test closing all clients."""
+        # Get clients to initialize them
+        deepseek = get_deepseek_client()
+        anthropic = get_anthropic_client()
+        
+        # Mock close methods
+        with patch.object(deepseek.client, 'aclose', new=AsyncMock()) as mock_deepseek_close:
+            with patch.object(anthropic.client, 'aclose', new=AsyncMock()) as mock_anthropic_close:
+                await close_clients()
+                
+                mock_deepseek_close.assert_called_once()
+                mock_anthropic_close.assert_called_once()
+
+
+class TestLLMClientError:
+    """Tests for LLMClientError exception."""
+    
+    def test_client_error_creation(self):
+        """Test creating LLMClientError."""
+        error = LLMClientError("Test error")
+        assert str(error) == "Test error"
+    
+    def test_client_error_raise(self):
+        """Test raising LLMClientError."""
+        with pytest.raises(LLMClientError) as exc_info:
+            raise LLMClientError("Test error message")
+        
+        assert "Test error message" in str(exc_info.value)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
