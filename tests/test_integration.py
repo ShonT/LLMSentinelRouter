@@ -51,7 +51,9 @@ class TestIntegration:
     async def test_end_to_end_weak_routing(self, test_db):
         """Test complete flow for a simple request that should route to weak model."""
         from sentinelrouter.sentinelrouter.router_logic import Router
+        from sentinelrouter.sentinelrouter.clients import LLMResponse
         from sqlalchemy.orm import Session as DBSession
+        from unittest.mock import patch, AsyncMock
         
         SessionLocal = sessionmaker(bind=test_db)
         db = SessionLocal()
@@ -59,12 +61,23 @@ class TestIntegration:
         try:
             router = Router(db)
             
-            # Simple prompt that should go to weak model
-            result = await router.route(
-                session_id="integration_test_1",
-                prompt="What is 2 + 2?",
-                messages=[{"role": "user", "content": "What is 2 + 2?"}],
+            # Mock LLM response to avoid API calls
+            mock_response = LLMResponse(
+                content="4",
+                model="deepseek-chat",
+                usage={"total_tokens": 10},
+                cost=0.0001
             )
+            
+            with patch("sentinelrouter.sentinelrouter.router_logic.get_deepseek_client") as mock_client:
+                mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
+                
+                # Simple prompt that should go to weak model
+                result = await router.route(
+                    session_id="integration_test_1",
+                    prompt="What is 2 + 2?",
+                    messages=[{"role": "user", "content": "What is 2 + 2?"}],
+                )
             
             # Verify result structure
             assert "model_used" in result
@@ -84,8 +97,10 @@ class TestIntegration:
     async def test_budget_enforcement(self, test_db):
         """Test that budget kill-switch blocks requests when limit exceeded."""
         from sentinelrouter.sentinelrouter.router_logic import Router
-        from sentinelrouter.budget import BudgetKillSwitch
+        from sentinelrouter.sentinelrouter.budget import BudgetKillSwitch
+        from sentinelrouter.sentinelrouter.clients import LLMResponse
         from sqlalchemy.orm import Session as DBSession
+        from unittest.mock import patch, AsyncMock
         
         SessionLocal = sessionmaker(bind=test_db)
         db = SessionLocal()
@@ -99,16 +114,27 @@ class TestIntegration:
             session.max_cost_per_session = 0.001  # Very low limit
             db.commit()
             
+            # Mock LLM response
+            mock_response = LLMResponse(
+                content="Response",
+                model="deepseek-chat",
+                usage={"total_tokens": 10},
+                cost=0.0005  # Each request costs 0.0005, so 2 requests will exceed 0.001
+            )
+            
             # First request should succeed (if cost is low enough) or fail
             # Either way, test that budget check is called
             with pytest.raises(ValueError, match="Budget exceeded"):
                 # Try multiple requests to exceed budget
                 for i in range(5):
-                    await router.route(
-                        session_id="budget_test",
-                        prompt=f"Test request {i}",
-                        messages=[{"role": "user", "content": f"Test request {i}"}],
-                    )
+                    with patch("sentinelrouter.sentinelrouter.router_logic.get_deepseek_client") as mock_client:
+                        mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
+                        
+                        await router.route(
+                            session_id="budget_test",
+                            prompt=f"Test request {i}",
+                            messages=[{"role": "user", "content": f"Test request {i}"}],
+                        )
         
         finally:
             db.close()
@@ -117,7 +143,7 @@ class TestIntegration:
     async def test_cycle_detection(self, test_db):
         """Test that cycle detection identifies repetitive patterns."""
         from sentinelrouter.sentinelrouter.router_logic import Router
-        from sentinelrouter.cycle_detector import CycleDetector
+        from sentinelrouter.sentinelrouter.cycle_detector import CycleDetector
         from sqlalchemy.orm import Session as DBSession
         
         SessionLocal = sessionmaker(bind=test_db)
@@ -148,7 +174,7 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_threshold_adjustment(self, test_db):
         """Test that dynamic threshold adjusts based on escalation rate."""
-        from sentinelrouter.threshold import DynamicThreshold
+        from sentinelrouter.sentinelrouter.threshold import DynamicThreshold
         
         threshold_mgr = DynamicThreshold(initial_threshold=0.7, target_rate=0.05)
         
@@ -167,21 +193,35 @@ class TestIntegration:
     async def test_concurrent_requests(self, test_db):
         """Test that concurrent requests don't cause race conditions."""
         from sentinelrouter.sentinelrouter.router_logic import Router
+        from sentinelrouter.sentinelrouter.clients import LLMResponse
         from sqlalchemy.orm import Session as DBSession
+        from unittest.mock import patch, AsyncMock
         
         SessionLocal = sessionmaker(bind=test_db)
+        
+        # Mock LLM response
+        mock_response = LLMResponse(
+            content="Response",
+            model="deepseek-chat",
+            usage={"total_tokens": 10},
+            cost=0.0001
+        )
         
         async def make_request(session_id: str, request_num: int):
             """Helper to make a single request."""
             db = SessionLocal()
             try:
                 router = Router(db)
-                result = await router.route(
-                    session_id=session_id,
-                    prompt=f"Concurrent request {request_num}",
-                    messages=[{"role": "user", "content": f"Concurrent request {request_num}"}],
-                )
-                return result
+                
+                with patch("sentinelrouter.sentinelrouter.router_logic.get_deepseek_client") as mock_client:
+                    mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
+                    
+                    result = await router.route(
+                        session_id=session_id,
+                        prompt=f"Concurrent request {request_num}",
+                        messages=[{"role": "user", "content": f"Concurrent request {request_num}"}],
+                    )
+                    return result
             finally:
                 db.close()
         
@@ -203,7 +243,7 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_strict_mode_activation(self, test_db):
         """Test that strict mode activates when escalation rate is high."""
-        from sentinelrouter.threshold import DynamicThreshold
+        from sentinelrouter.sentinelrouter.threshold import DynamicThreshold
         
         threshold_mgr = DynamicThreshold(
             initial_threshold=0.5,
@@ -242,7 +282,7 @@ class TestOpenAICompatibility:
         from fastapi.testclient import TestClient
         from sentinelrouter.sentinelrouter.server import app
         from unittest.mock import patch, AsyncMock
-        from sentinelrouter.clients import LLMResponse
+        from sentinelrouter.sentinelrouter.clients import LLMResponse
         
         client = TestClient(app)
         
@@ -263,7 +303,7 @@ class TestOpenAICompatibility:
             "decision_reason": "Low complexity"
         }
         
-        with patch("sentinelrouter.server.route_request", new=AsyncMock(return_value=mock_result)):
+        with patch("sentinelrouter.sentinelrouter.server.route_request", new=AsyncMock(return_value=mock_result)):
             response = client.post(
                 "/v1/chat/completions",
                 json={
@@ -318,7 +358,7 @@ class TestAuditTrail:
         from sentinelrouter.sentinelrouter.models import RoutingDecision
         from sqlalchemy.orm import sessionmaker
         from unittest.mock import patch, AsyncMock
-        from sentinelrouter.clients import LLMResponse
+        from sentinelrouter.sentinelrouter.clients import LLMResponse
         
         SessionLocal = sessionmaker(bind=test_db)
         db = SessionLocal()
@@ -334,7 +374,7 @@ class TestAuditTrail:
                 cost=0.0001
             )
             
-            with patch("sentinelrouter.router_logic.get_deepseek_client") as mock_client:
+            with patch("sentinelrouter.sentinelrouter.router_logic.get_deepseek_client") as mock_client:
                 mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
                 
                 await router.route(
@@ -358,8 +398,9 @@ class TestAuditTrail:
     @pytest.mark.asyncio
     async def test_json_logging_format(self, test_db):
         """Test that logs are in structured JSON format."""
-        from sentinelrouter.logging_audit import LoggingAudit
+        from sentinelrouter.sentinelrouter.logging_audit import LoggingAudit
         from sqlalchemy.orm import sessionmaker
+        from datetime import datetime
         import logging
         
         SessionLocal = sessionmaker(bind=test_db)
@@ -372,12 +413,12 @@ class TestAuditTrail:
             await audit.log_request_response(
                 session_id="test",
                 request_id="req123",
-                prompt="Test prompt",
-                response="Test response",
-                model_used="deepseek",
+                request={"messages": [{"role": "user", "content": "Test prompt"}]},
+                response={"content": "Test response"},
+                routing_decision={"model_used": "deepseek", "complexity_score": 0.5},
                 cost=0.001,
-                complexity_score=0.5,
-                metadata={"test": "data"}
+                start_time=datetime.utcnow(),
+                end_time=datetime.utcnow()
             )
             
             # Verify method executes without error
@@ -407,16 +448,35 @@ class TestDockerReadiness:
     def test_metrics_endpoint_exists(self):
         """Test metrics endpoint exists."""
         from fastapi.testclient import TestClient
-        from sentinelrouter.sentinelrouter.server import app
+        from sentinelrouter.sentinelrouter.server import app, get_db
+        from unittest.mock import MagicMock
         
         client = TestClient(app)
-        response = client.get("/metrics")
         
-        assert response.status_code == 200
-        data = response.json()
-        assert "session_count" in data
-        assert "total_cost" in data
-        assert "decision_count" in data
+        # Create mock database
+        def mock_get_db():
+            mock_db = MagicMock()
+            mock_db.query.return_value.count.return_value = 3
+            mock_db.query.return_value.filter.return_value.all.return_value = []
+            try:
+                yield mock_db
+            finally:
+                pass
+        
+        # Override the dependency
+        app.dependency_overrides[get_db] = mock_get_db
+        
+        try:
+            response = client.get("/metrics")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert "session_count" in data
+            assert "total_cost" in data
+            assert "decision_count" in data
+        finally:
+            # Clean up override
+            app.dependency_overrides.clear()
 
 
 class TestRequirementsCoverage:
@@ -437,7 +497,7 @@ class TestRequirementsCoverage:
     @pytest.mark.asyncio
     async def test_module_a_budget_killswitch(self, test_db):
         """Requirement: Module A – Budget Kill-Switch tracks cost and rejects when exceeded."""
-        from sentinelrouter.budget import BudgetKillSwitch
+        from sentinelrouter.sentinelrouter.budget import BudgetKillSwitch
         from sqlalchemy.orm import sessionmaker
         
         SessionLocal = sessionmaker(bind=test_db)
@@ -468,9 +528,9 @@ class TestRequirementsCoverage:
     @pytest.mark.asyncio
     async def test_module_b_judge_categorizer(self, test_db):
         """Requirement: Module B – Judge uses weak model to analyze complexity."""
-        from sentinelrouter.judge import StingyJudge
+        from sentinelrouter.sentinelrouter.judge import StingyJudge
         from unittest.mock import patch, AsyncMock
-        from sentinelrouter.clients import LLMResponse
+        from sentinelrouter.sentinelrouter.clients import LLMResponse
         import json
         
         judge = StingyJudge()
@@ -486,7 +546,7 @@ class TestRequirementsCoverage:
             cost=0.0001
         )
         
-        with patch("sentinelrouter.judge.get_deepseek_client") as mock_client:
+        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
             mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
             
             score, impact, reasoning = await judge.judge("Complex prompt")
@@ -497,7 +557,7 @@ class TestRequirementsCoverage:
     
     def test_module_c_dynamic_thresholding(self):
         """Requirement: Module C – Dynamic Thresholding adjusts based on 5% rule."""
-        from sentinelrouter.threshold import DynamicThreshold
+        from sentinelrouter.sentinelrouter.threshold import DynamicThreshold
         
         threshold = DynamicThreshold(initial_threshold=0.7, target_rate=0.05, window_size=20)
         
@@ -517,7 +577,7 @@ class TestRequirementsCoverage:
     
     def test_module_d_cycle_detection(self):
         """Requirement: Module D – Graph-Based Cycle Detection using networkx."""
-        from sentinelrouter.cycle_detector import CycleDetector
+        from sentinelrouter.sentinelrouter.cycle_detector import CycleDetector
         
         detector = CycleDetector(session_id="test")
         
@@ -543,7 +603,7 @@ class TestLiveAPI:
     @pytest.mark.asyncio
     async def test_live_deepseek_call(self):
         """Test real DeepSeek API call."""
-        from sentinelrouter.clients import get_deepseek_client
+        from sentinelrouter.sentinelrouter.clients import get_deepseek_client
         
         client = get_deepseek_client()
         messages = [{"role": "user", "content": "Say 'test' and nothing else."}]
@@ -558,7 +618,7 @@ class TestLiveAPI:
     @pytest.mark.asyncio
     async def test_live_anthropic_call(self):
         """Test real Anthropic API call."""
-        from sentinelrouter.clients import get_anthropic_client
+        from sentinelrouter.sentinelrouter.clients import get_anthropic_client
         
         client = get_anthropic_client()
         messages = [{"role": "user", "content": "Say 'test' and nothing else."}]

@@ -277,6 +277,31 @@ class LoggingAudit:
                 end_time=end_time,
             )
 
+    def log_routing_decision(
+        self,
+        session_id: str,
+        request_id: str,
+        model_used: str,
+        complexity_score: float,
+        cost_incurred: float,
+        prompt_hash: str = "",
+        impact_scope: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        """
+        Delegate to AuditLogger.log_routing_decision (synchronous).
+        """
+        self.audit_logger.log_routing_decision(
+            session_id=session_id,
+            request_id=request_id,
+            model_used=model_used,
+            complexity_score=complexity_score,
+            cost_incurred=cost_incurred,
+            prompt_hash=prompt_hash,
+            impact_scope=impact_scope,
+            reason=reason,
+        )
+
     async def log_escalation(
         self,
         session_id: str,

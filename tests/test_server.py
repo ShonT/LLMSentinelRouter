@@ -27,23 +27,63 @@ def test_health_endpoint(client):
 
 def test_metrics_endpoint(client):
     """Test the metrics endpoint (placeholder)."""
-    response = client.get("/metrics")
-    assert response.status_code == 200
-    data = response.json()
-    assert "requests_total" in data
-    assert "cost_total" in data
+    from unittest.mock import MagicMock
+    from sentinelrouter.sentinelrouter.server import app, get_db
+    
+    # Create mock database
+    def mock_get_db():
+        mock_db = MagicMock()
+        mock_db.query.return_value.count.return_value = 5
+        mock_db.query.return_value.filter.return_value.all.return_value = []
+        try:
+            yield mock_db
+        finally:
+            pass
+    
+    # Override the dependency
+    app.dependency_overrides[get_db] = mock_get_db
+    
+    try:
+        response = client.get("/metrics")
+        assert response.status_code == 200
+        data = response.json()
+        assert "session_count" in data
+        assert "total_cost" in data
+        assert "decision_count" in data
+    finally:
+        # Clean up override
+        app.dependency_overrides.clear()
 
 
 def test_audit_endpoint(client):
     """Test the audit endpoint (placeholder)."""
-    response = client.get("/audit/some_session")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["session_id"] == "some_session"
-    assert "decisions" in data
+    from unittest.mock import MagicMock
+    from sentinelrouter.sentinelrouter.server import app, get_db
+    
+    # Create mock database
+    def mock_get_db():
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.all.return_value = []
+        try:
+            yield mock_db
+        finally:
+            pass
+    
+    # Override the dependency
+    app.dependency_overrides[get_db] = mock_get_db
+    
+    try:
+        response = client.get("/audit/some_session")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["session_id"] == "some_session"
+        assert "decisions" in data
+    finally:
+        # Clean up override
+        app.dependency_overrides.clear()
 
 
-@patch("sentinelrouter.server.route_request")
+@patch("sentinelrouter.sentinelrouter.server.route_request")
 def test_chat_completions_success(mock_route, client):
     """Test the chat completions endpoint with successful routing."""
     mock_response = LLMResponse(
@@ -78,7 +118,7 @@ def test_chat_completions_success(mock_route, client):
     assert response.headers["X-Sentinel-Complexity-Score"] == "0.3"
 
 
-@patch("sentinelrouter.server.route_request")
+@patch("sentinelrouter.sentinelrouter.server.route_request")
 def test_chat_completions_budget_exceeded(mock_route, client):
     """Test that budget exceeded returns 429."""
     mock_route.side_effect = ValueError("Budget exceeded for session test_session.")
@@ -94,7 +134,7 @@ def test_chat_completions_budget_exceeded(mock_route, client):
     assert "Budget exceeded" in data["detail"]
 
 
-@patch("sentinelrouter.server.route_request")
+@patch("sentinelrouter.sentinelrouter.server.route_request")
 def test_chat_completions_no_session_id(mock_route, client):
     """Test that a session ID is generated when not provided."""
     mock_response = LLMResponse(

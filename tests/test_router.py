@@ -61,7 +61,7 @@ async def test_route_success_weak(router):
         usage={"total_tokens": 10},
         cost=0.0001,
     )
-    with patch("sentinelrouter.router_logic.get_deepseek_client") as mock_client:
+    with patch("sentinelrouter.sentinelrouter.router_logic.get_deepseek_client") as mock_client:
         mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
         # Mock audit logger
         router.audit.log_routing_decision = MagicMock()
@@ -92,7 +92,7 @@ async def test_route_success_strong(router):
         usage={"input_tokens": 5, "output_tokens": 10},
         cost=0.0015,
     )
-    with patch("sentinelrouter.router_logic.get_anthropic_client") as mock_client:
+    with patch("sentinelrouter.sentinelrouter.router_logic.get_anthropic_client") as mock_client:
         mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
         router.audit.log_routing_decision = MagicMock()
         router.budget.add_cost = MagicMock()
