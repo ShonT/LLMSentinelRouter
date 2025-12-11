@@ -145,6 +145,36 @@ async def health():
     """Health check endpoint."""
     return {"status": "healthy", "service": "sentinelrouter"}
 
+@app.get("/v1/models")
+async def list_models():
+    """
+    List available models (OpenAI-compatible endpoint).
+    Returns the models that SentinelRouter can route to.
+    """
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "gpt-4",
+                "object": "model",
+                "created": 1687882411,
+                "owned_by": "sentinelrouter",
+                "permission": [],
+                "root": "gpt-4",
+                "parent": None,
+            },
+            {
+                "id": "gpt-3.5-turbo",
+                "object": "model",
+                "created": 1677610602,
+                "owned_by": "sentinelrouter",
+                "permission": [],
+                "root": "gpt-3.5-turbo",
+                "parent": None,
+            },
+        ]
+    }
+
 @app.get("/metrics")
 async def metrics():
     """Return current system metrics."""
