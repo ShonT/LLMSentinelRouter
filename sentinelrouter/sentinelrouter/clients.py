@@ -107,9 +107,9 @@ class BaseLLMClient:
 
 
 class GeminiClient(BaseLLMClient):
-    """Client for Google Gemini API (Flash models)."""
+    """Client for Google Gemini API (Flash 2.5 models)."""
 
-    def __init__(self, api_key: str, model_id: str = "gemini-2.0-flash-exp"):
+    def __init__(self, api_key: str, model_id: str = "gemini-2.5-flash"):
         super().__init__(
             api_key=api_key,
             base_url="https://generativelanguage.googleapis.com/v1beta",
@@ -334,6 +334,7 @@ _deepseek_client: Optional[DeepSeekClient] = None
 _anthropic_client: Optional[AnthropicClient] = None
 _gemini_backup1_client: Optional['GeminiClient'] = None
 _gemini_backup2_client: Optional['GeminiClient'] = None
+_gemini_flash_latest_client: Optional['GeminiClient'] = None
 
 
 async def get_deepseek_client() -> DeepSeekClient:
@@ -358,25 +359,36 @@ async def get_gemini_backup1_client() -> 'GeminiClient':
     if _gemini_backup1_client is None:
         _gemini_backup1_client = GeminiClient(
             api_key=settings.gemini_backup1_api_key,
-            model_id="gemini-2.0-flash-exp"
+            model_id="gemini-2.5-flash"
         )
     return _gemini_backup1_client
 
 
 async def get_gemini_backup2_client() -> 'GeminiClient':
-    """Get or create the Gemini Backup 2 client instance (gemini-2.5-flash-live)."""
+    """Get or create the Gemini Backup 2 client instance (gemini-2.5-flash-lite)."""
     global _gemini_backup2_client
     if _gemini_backup2_client is None:
         _gemini_backup2_client = GeminiClient(
             api_key=settings.gemini_backup2_api_key,
-            model_id="gemini-2.0-flash-exp"
+            model_id="gemini-2.5-flash-lite"
         )
     return _gemini_backup2_client
 
 
+async def get_gemini_flash_latest_client() -> 'GeminiClient':
+    """Get or create the Gemini Flash Latest client instance."""
+    global _gemini_flash_latest_client
+    if _gemini_flash_latest_client is None:
+        _gemini_flash_latest_client = GeminiClient(
+            api_key=settings.gemini_backup1_api_key,  # Reuse key 1
+            model_id="gemini-flash-latest"
+        )
+    return _gemini_flash_latest_client
+
+
 async def close_clients():
     """Close all client connections."""
-    global _deepseek_client, _anthropic_client, _gemini_backup1_client, _gemini_backup2_client
+    global _deepseek_client, _anthropic_client, _gemini_backup1_client, _gemini_backup2_client, _gemini_flash_latest_client
     if _deepseek_client:
         await _deepseek_client.close()
         _deepseek_client = None
@@ -389,3 +401,6 @@ async def close_clients():
     if _gemini_backup2_client:
         await _gemini_backup2_client.close()
         _gemini_backup2_client = None
+    if _gemini_flash_latest_client:
+        await _gemini_flash_latest_client.close()
+        _gemini_flash_latest_client = None

@@ -364,6 +364,19 @@ async def generic_exception_handler(request: Request, exc: Exception):
     )
 
 if __name__ == "__main__":
+    import threading
+    from .dashboard import start_dashboard_server
+    
+    # Start dashboard server in a separate thread
+    dashboard_thread = threading.Thread(
+        target=start_dashboard_server,
+        kwargs={"host": "0.0.0.0", "port": 8001},
+        daemon=True
+    )
+    dashboard_thread.start()
+    logger.info("Dashboard server started on http://localhost:8001")
+    
+    # Start main API server
     uvicorn.run(
         "sentinelrouter.server:app",
         host=settings.host,

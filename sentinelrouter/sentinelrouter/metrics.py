@@ -1,0 +1,279 @@
+"""
+Metrics collection and persistence module for SentinelRouter.
+
+Tracks:
+- Judge latency
+- Model latency (weak/strong)
+- Fallback occurrences
+- Cycle detection
+- Tokens per second
+
+Persists metrics to file storage with 200MB limit.
+"""
+
+import json
+import os
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Any, List
+import logging
+from collections import deque
+from threading import Lock
+
+logger = logging.getLogger(__name__)
+
+
+class MetricsCollector:
+    """
+    Collects and persists metrics to file storage.
+    
+    Features:
+    - File-based persistence with 200MB limit
+    - Auto-rotation when limit exceeded
+    - Thread-safe operations
+    - JSON format for easy parsing
+    """
+    
+    def __init__(self, storage_dir: str = "./data/metrics", max_size_mb: int = 200):
+        self.storage_dir = Path(storage_dir)
+        self.max_size_bytes = max_size_mb * 1024 * 1024
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.metrics_file = self.storage_dir / "metrics.jsonl"
+        self.lock = Lock()
+        
+        # In-memory buffer for recent metrics (for dashboard)
+        self.recent_metrics = deque(maxlen=1000)  # Keep last 1000 metrics
+        
+        # Load existing metrics from file
+        self._load_recent_metrics()
+        
+        logger.info(f"MetricsCollector initialized: {self.storage_dir}, max_size={max_size_mb}MB, loaded {len(self.recent_metrics)} recent metrics")
+    
+    def _check_and_rotate_if_needed(self):
+        """Check file size and rotate if needed."""
+        if not self.metrics_file.exists():
+            return
+        
+        file_size = self.metrics_file.stat().st_size
+        if file_size >= self.max_size_bytes:
+            logger.warning(f"Metrics file exceeded {self.max_size_bytes} bytes, rotating...")
+            
+            # Archive old file with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive_file = self.storage_dir / f"metrics_archive_{timestamp}.jsonl"
+            self.metrics_file.rename(archive_file)
+            
+            # Remove oldest archives if total size exceeds limit
+            self._cleanup_old_archives()
+            
+            logger.info(f"Metrics rotated to {archive_file}")
+    
+    def _cleanup_old_archives(self):
+        """Remove oldest archive files if total size exceeds limit."""
+        archives = sorted(self.storage_dir.glob("metrics_archive_*.jsonl"))
+        total_size = sum(f.stat().st_size for f in archives)
+        
+        # Keep removing oldest until under limit
+        while total_size > self.max_size_bytes and archives:
+            oldest = archives.pop(0)
+            removed_size = oldest.stat().st_size
+            oldest.unlink()
+            total_size -= removed_size
+            logger.info(f"Removed old archive: {oldest.name}")
+    
+    def _load_recent_metrics(self):
+        """Load recent metrics from file into in-memory buffer."""
+        if not self.metrics_file.exists():
+            logger.info("No existing metrics file found, starting fresh")
+            self.recent_metrics.clear()
+            return
+        
+        try:
+            # Clear existing buffer first
+            self.recent_metrics.clear()
+            
+            with open(self.metrics_file, "r") as f:
+                # Read last 1000 lines efficiently
+                lines = deque(f, maxlen=1000)
+                
+            for line in lines:
+                try:
+                    metric = json.loads(line.strip())
+                    self.recent_metrics.append(metric)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse metric line: {e}")
+                    
+            logger.info(f"Loaded {len(self.recent_metrics)} metrics from file")
+        except Exception as e:
+            logger.error(f"Failed to load metrics from file: {e}")
+    
+    def record_judge_latency(self, judge_id: str, latency_ms: float, status: str):
+        """Record judge latency."""
+        metric = {
+            "type": "judge_latency",
+            "timestamp": time.time(),
+            "judge_id": judge_id,
+            "latency_ms": latency_ms,
+            "status": status
+        }
+        self._write_metric(metric)
+    
+    def record_model_latency(self, model_id: str, route_type: str, latency_ms: float, status: str):
+        """Record model latency (weak or strong)."""
+        metric = {
+            "type": f"{route_type}_model_latency",
+            "timestamp": time.time(),
+            "model_id": model_id,
+            "route_type": route_type,
+            "latency_ms": latency_ms,
+            "status": status
+        }
+        self._write_metric(metric)
+    
+    def record_fallback(self, fallback_type: str, primary_id: str, backup_id: str):
+        """Record fallback occurrence."""
+        metric = {
+            "type": f"{fallback_type}_fallback",
+            "timestamp": time.time(),
+            "primary_id": primary_id,
+            "backup_id": backup_id
+        }
+        self._write_metric(metric)
+    
+    def record_cycle_detection(self, session_id: str, hash_distance: int):
+        """Record cycle detection."""
+        metric = {
+            "type": "cycle_detection",
+            "timestamp": time.time(),
+            "session_id": session_id,
+            "hash_distance": hash_distance
+        }
+        self._write_metric(metric)
+    
+    def record_tokens_per_second(self, model_id: str, route_type: str, tps: float, total_tokens: int):
+        """Record tokens per second."""
+        metric = {
+            "type": "tokens_per_second",
+            "timestamp": time.time(),
+            "model_id": model_id,
+            "route_type": route_type,
+            "tps": tps,
+            "total_tokens": total_tokens
+        }
+        self._write_metric(metric)
+    
+    def _write_metric(self, metric: Dict[str, Any]):
+        """Write metric to file and in-memory buffer."""
+        with self.lock:
+            # Add to in-memory buffer
+            self.recent_metrics.append(metric)
+            
+            # Check and rotate if needed
+            self._check_and_rotate_if_needed()
+            
+            # Write to file
+            with open(self.metrics_file, "a") as f:
+                f.write(json.dumps(metric) + "\n")
+    
+    def get_recent_metrics(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get recent metrics from in-memory buffer."""
+        with self.lock:
+            return list(self.recent_metrics)[-limit:]
+    
+    def get_aggregated_stats(self) -> Dict[str, Any]:
+        """Get aggregated statistics from recent metrics."""
+        with self.lock:
+            metrics = list(self.recent_metrics)
+        
+        if not metrics:
+            return {}
+        
+        stats = {
+            "total_metrics": len(metrics),
+            "judge_latency": self._aggregate_latency(metrics, "judge_latency"),
+            "weak_model_latency": self._aggregate_latency(metrics, "weak_model_latency"),
+            "strong_model_latency": self._aggregate_latency(metrics, "strong_model_latency"),
+            "fallback_counts": self._count_fallbacks(metrics),
+            "cycle_detection_count": self._count_cycles(metrics),
+            "tokens_per_second": self._aggregate_tps(metrics),
+        }
+        
+        return stats
+    
+    def _aggregate_latency(self, metrics: List[Dict], metric_type: str) -> Dict[str, Any]:
+        """Aggregate latency metrics."""
+        latencies = [m["latency_ms"] for m in metrics if m.get("type") == metric_type]
+        if not latencies:
+            return {"count": 0, "avg": 0, "min": 0, "max": 0, "p50": 0, "p95": 0, "p99": 0}
+        
+        latencies.sort()
+        count = len(latencies)
+        return {
+            "count": count,
+            "avg": sum(latencies) / count,
+            "min": latencies[0],
+            "max": latencies[-1],
+            "p50": latencies[int(count * 0.5)],
+            "p95": latencies[int(count * 0.95)] if count > 1 else latencies[0],
+            "p99": latencies[int(count * 0.99)] if count > 1 else latencies[0],
+        }
+    
+    def _count_fallbacks(self, metrics: List[Dict]) -> Dict[str, int]:
+        """Count fallback occurrences."""
+        fallback_types = ["judge_fallback", "weak_model_fallback", "strong_model_fallback"]
+        counts = {}
+        for fb_type in fallback_types:
+            counts[fb_type] = len([m for m in metrics if m.get("type") == fb_type])
+        return counts
+    
+    def _count_cycles(self, metrics: List[Dict]) -> int:
+        """Count cycle detection occurrences."""
+        return len([m for m in metrics if m.get("type") == "cycle_detection"])
+    
+    def _aggregate_tps(self, metrics: List[Dict]) -> Dict[str, Any]:
+        """Aggregate tokens per second metrics."""
+        tps_metrics = [m for m in metrics if m.get("type") == "tokens_per_second"]
+        if not tps_metrics:
+            return {"count": 0, "avg": 0, "total_tokens": 0}
+        
+        tps_values = [m["tps"] for m in tps_metrics]
+        total_tokens = sum(m["total_tokens"] for m in tps_metrics)
+        
+        return {
+            "count": len(tps_values),
+            "avg": sum(tps_values) / len(tps_values),
+            "total_tokens": total_tokens,
+        }
+    
+    def reset_metrics(self):
+        """Reset all metrics - clear in-memory buffer and delete metrics file."""
+        with self.lock:
+            # Clear in-memory buffer
+            self.recent_metrics.clear()
+            
+            # Delete metrics file if it exists
+            if self.metrics_file.exists():
+                self.metrics_file.unlink()
+                logger.info(f"Deleted metrics file: {self.metrics_file}")
+            
+            # Optionally delete archive files too
+            archives = list(self.storage_dir.glob("metrics_archive_*.jsonl"))
+            for archive in archives:
+                archive.unlink()
+                logger.info(f"Deleted archive: {archive.name}")
+            
+            logger.info("All metrics reset to zero")
+
+
+# Global metrics collector instance
+_metrics_collector: MetricsCollector = None
+
+
+def get_metrics_collector() -> MetricsCollector:
+    """Get or create the global metrics collector."""
+    global _metrics_collector
+    if _metrics_collector is None:
+        _metrics_collector = MetricsCollector()
+    return _metrics_collector

@@ -5,6 +5,7 @@ Main router logic that integrates all modules (A-D) for intelligent routing.
 import asyncio
 import logging
 import uuid
+import time
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 
@@ -19,6 +20,7 @@ from .clients import (
     get_anthropic_client, 
     get_gemini_backup1_client,
     get_gemini_backup2_client,
+    get_gemini_flash_latest_client,
     LLMResponse, 
     LLMClientError
 )
@@ -26,8 +28,12 @@ from .logging_audit import LoggingAudit
 from .config import settings
 from .database import get_db
 from .models import RoutingDecision
+from .metrics import get_metrics_collector
+from .throttle_manager import get_throttle_manager
 
 logger = logging.getLogger(__name__)
+metrics = get_metrics_collector()
+throttle_manager = get_throttle_manager()
 
 # Global cache for cycle detectors (persistent across requests)
 # This ensures cycle detection works across multiple API calls
@@ -141,41 +147,140 @@ class Router:
         # 5. Select client and make the call with failover support
         response = None
         if route_decision == "weak":
-            # Weak model chain: DeepSeek → Gemini Flash → Gemini Flash Live
+            # Weak model chain: DeepSeek → Gemini 2.5 Flash → Gemini 2.5 Flash Lite → Gemini Flash Latest
             weak_models = [
                 ("deepseek", get_deepseek_client),
-                ("gemini-flash", get_gemini_backup1_client),
-                ("gemini-flash-live", get_gemini_backup2_client),
+                ("gemini-2.5-flash", get_gemini_backup1_client),
+                ("gemini-2.5-flash-lite", get_gemini_backup2_client),
+                ("gemini-flash-latest", get_gemini_flash_latest_client),
             ]
             
-            for model_name, client_getter in weak_models:
+            primary_model = weak_models[0][0]
+            for idx, (model_name, client_getter) in enumerate(weak_models):
+                # Check if model is banned
+                if throttle_manager.is_banned(model_name):
+                    ban_info = throttle_manager.get_ban_info(model_name)
+                    logger.warning(
+                        f"Skipping banned weak model {model_name}: "
+                        f"{ban_info['seconds_remaining']}s remaining"
+                    )
+                    continue
+                
                 try:
                     client = await client_getter()
                     model_used = model_name
                     logger.debug(f"Trying weak model: {model_name}")
+                    
+                    # Track latency
+                    start_time = time.time()
                     response = await client.chat_completion(messages)
+                    latency_ms = (time.time() - start_time) * 1000
+                    
+                    # Record metrics
+                    metrics.record_model_latency(model_name, "weak", latency_ms, "success")
+                    
+                    # Calculate tokens per second
+                    if hasattr(response, 'usage') and response.usage:
+                        total_tokens = response.usage.get('total_tokens', 0)
+                        if total_tokens > 0 and latency_ms > 0:
+                            tps = total_tokens / (latency_ms / 1000)
+                            metrics.record_tokens_per_second(model_name, "weak", tps, total_tokens)
+                    
+                    # Record fallback if not using primary
+                    if idx > 0:
+                        backup_model = weak_models[idx][0]
+                        metrics.record_fallback("weak", primary_model, backup_model)
+                    
                     break  # Success - exit loop
                 except Exception as e:
+                    error_msg = str(e).lower()
+                    
+                    # Check for throttle/rate limit errors
+                    is_throttle = any(keyword in error_msg for keyword in [
+                        'rate limit', 'throttle', '429', 'quota exceeded', 'too many requests'
+                    ])
+                    
+                    if is_throttle:
+                        # Record throttle and potentially ban model
+                        ban_duration = throttle_manager.record_throttle(model_name, str(e))
+                        if ban_duration:
+                            logger.error(
+                                f"Model {model_name} BANNED for {ban_duration}s due to throttling"
+                            )
+                            metrics.record_fallback("weak_throttle_ban", primary_model, model_name)
+                    
+                    # Record failed attempt
+                    metrics.record_model_latency(model_name, "weak", 0, "error")
+                    
                     logger.warning(f"Weak model {model_name} failed: {e}")
                     if model_name == weak_models[-1][0]:  # Last model in chain
                         logger.error(f"All weak models failed!")
                         raise LLMClientError(f"All weak models unavailable: {e}")
                     logger.info(f"Falling back to next weak model...")
         else:
-            # Strong model chain: Anthropic → Gemini Flash
+            # Strong model chain: Anthropic → Gemini 2.5 Flash
             strong_models = [
                 ("anthropic", get_anthropic_client),
-                ("gemini-flash", get_gemini_backup1_client),
+                ("gemini-2.5-flash", get_gemini_backup1_client),
             ]
             
-            for model_name, client_getter in strong_models:
+            primary_model = strong_models[0][0]
+            for idx, (model_name, client_getter) in enumerate(strong_models):
+                # Check if model is banned
+                if throttle_manager.is_banned(model_name):
+                    ban_info = throttle_manager.get_ban_info(model_name)
+                    logger.warning(
+                        f"Skipping banned strong model {model_name}: "
+                        f"{ban_info['seconds_remaining']}s remaining"
+                    )
+                    continue
+                
                 try:
                     client = await client_getter()
                     model_used = model_name
                     logger.debug(f"Trying strong model: {model_name}")
+                    
+                    # Track latency
+                    start_time = time.time()
                     response = await client.chat_completion(messages)
+                    latency_ms = (time.time() - start_time) * 1000
+                    
+                    # Record metrics
+                    metrics.record_model_latency(model_name, "strong", latency_ms, "success")
+                    
+                    # Calculate tokens per second
+                    if hasattr(response, 'usage') and response.usage:
+                        total_tokens = response.usage.get('total_tokens', 0)
+                        if total_tokens > 0 and latency_ms > 0:
+                            tps = total_tokens / (latency_ms / 1000)
+                            metrics.record_tokens_per_second(model_name, "strong", tps, total_tokens)
+                    
+                    # Record fallback if not using primary
+                    if idx > 0:
+                        backup_model = strong_models[idx][0]
+                        metrics.record_fallback("strong", primary_model, backup_model)
+                    
                     break  # Success - exit loop
                 except Exception as e:
+                    error_msg = str(e).lower()
+                    
+                    # Check for throttle/rate limit errors
+                    is_throttle = any(keyword in error_msg for keyword in [
+                        'rate limit', 'throttle', '429', 'quota exceeded', 'too many requests'
+                    ])
+                    
+                    if is_throttle:
+                        # Record throttle and potentially ban model
+                        ban_duration = throttle_manager.record_throttle(model_name, str(e))
+                        if ban_duration:
+                            logger.error(
+                                f"Model {model_name} BANNED for {ban_duration}s due to throttling"
+                            )
+                            metrics.record_fallback("strong_throttle_ban", primary_model, model_name)
+                    
+                    # Record failed attempt
+                    metrics.record_model_latency(model_name, "strong", 0, "error")
+                    
                     logger.warning(f"Strong model {model_name} failed: {e}")
                     if model_name == strong_models[-1][0]:  # Last model in chain
                         logger.error(f"All strong models failed!")
@@ -221,13 +326,16 @@ class Router:
                 reason="automatic adjustment",
             )
 
-        # 10. If cycle detected, log it
+        # 10. If cycle detected, log it and record metrics
         if cycle_detected:
-            self.audit.log_cycle_detection(
+            await self.audit.log_cycle_detection(
                 session_id=session_id,
                 prompt_hash=str(prompt_hash_int),
                 response_hash=str(response_hash_int),
             )
+            # Record cycle detection metric
+            hash_distance = cycle_detector.recent_hashes[-1][0] if cycle_detector.recent_hashes else 0
+            metrics.record_cycle_detection(session_id, hash_distance)
             logger.warning(f"Cycle logged for session {session_id}")
 
         return {

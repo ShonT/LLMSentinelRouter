@@ -10,13 +10,16 @@ Implements:
 
 import logging
 import json
+import time
 from typing import Tuple, Dict, Any, Optional, List
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from .clients import BaseLLMClient, LLMResponse, LLMClientError
+from .metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
+metrics = get_metrics_collector()
 
 
 @dataclass
@@ -297,13 +300,25 @@ class JudgeRegistry:
                     f"Using {judge.display_name} ({judge.judge_id})"
                 )
                 
+                # Track latency
+                start_time = time.time()
                 score, impact, reasoning = await judge.judge(user_prompt, context)
+                latency_ms = (time.time() - start_time) * 1000
                 
                 # Success! Record it and return
                 self.health_tracker.record_success(judge.judge_id)
+                
+                # Record metrics
+                metrics.record_judge_latency(judge.judge_id, latency_ms, "success")
+                
+                # Record fallback if not using primary
+                if attempt > 0:
+                    primary_judge_id = self._judges[0].judge_id if self._judges else "unknown"
+                    metrics.record_fallback("judge", primary_judge_id, judge.judge_id)
+                
                 logger.info(
                     f"✅ Judge success with {judge.judge_id}: "
-                    f"score={score:.3f}, impact={impact}"
+                    f"score={score:.3f}, impact={impact}, latency={latency_ms:.0f}ms"
                 )
                 return score, impact, reasoning, judge.judge_id
                 
@@ -314,6 +329,9 @@ class JudgeRegistry:
                     f"Trying next backup..."
                 )
                 self.health_tracker.record_failure(judge.judge_id)
+                
+                # Record failed attempt
+                metrics.record_judge_latency(judge.judge_id, 0, "error")
                 
                 # Continue to next judge
                 continue

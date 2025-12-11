@@ -16,6 +16,7 @@ from .clients import (
     get_anthropic_client, 
     get_gemini_backup1_client,
     get_gemini_backup2_client,
+    get_gemini_flash_latest_client,
     LLMResponse
 )
 from .config import settings
@@ -49,13 +50,13 @@ async def get_judge_registry() -> JudgeRegistry:
         
         _JUDGE_REGISTRY = JudgeRegistry(health_tracker=health_tracker)
         
-        # Register primary judge: Gemini Flash Live (priority 0 - cheapest, fastest)
-        gemini_live_client = await get_gemini_backup2_client()
+        # Register primary judge: Gemini 2.5 Flash Lite (priority 0 - fastest)
+        gemini_lite_client = await get_gemini_backup2_client()
         primary_judge = JudgeModel(
-            judge_id="gemini-flash-live-primary",
-            client=gemini_live_client,
+            judge_id="gemini-2.5-flash-lite-primary",
+            client=gemini_lite_client,
             priority=0,
-            display_name="Gemini Flash Live (Primary Judge)",
+            display_name="Gemini 2.5 Flash Lite (Primary Judge)",
             temperature=0.1
         )
         _JUDGE_REGISTRY.register_judge(primary_judge)
@@ -71,21 +72,32 @@ async def get_judge_registry() -> JudgeRegistry:
         )
         _JUDGE_REGISTRY.register_judge(backup_judge1)
         
-        # Register backup judge 2: Gemini Flash (priority 2)
+        # Register backup judge 2: Gemini 2.5 Flash (priority 2)
         gemini_flash_client = await get_gemini_backup1_client()
         backup_judge2 = JudgeModel(
-            judge_id="gemini-flash-backup2",
+            judge_id="gemini-2.5-flash-backup2",
             client=gemini_flash_client,
             priority=2,
-            display_name="Gemini Flash (Backup Judge 2)",
+            display_name="Gemini 2.5 Flash (Backup Judge 2)",
             temperature=0.1
         )
         _JUDGE_REGISTRY.register_judge(backup_judge2)
         
+        # Register backup judge 3: Gemini Flash Latest (priority 3)
+        gemini_latest_client = await get_gemini_flash_latest_client()
+        backup_judge3 = JudgeModel(
+            judge_id="gemini-flash-latest-backup3",
+            client=gemini_latest_client,
+            priority=3,
+            display_name="Gemini Flash Latest (Backup Judge 3)",
+            temperature=0.1
+        )
+        _JUDGE_REGISTRY.register_judge(backup_judge3)
+        
         logger.info(
-            "✅ Judge registry initialized with 3 judges: "
-            f"Primary={primary_judge.judge_id} (Gemini Live), "
-            f"Backups=[{backup_judge1.judge_id} (DeepSeek), {backup_judge2.judge_id} (Gemini Flash)]"
+            "✅ Judge registry initialized with 4 judges: "
+            f"Primary={primary_judge.judge_id} (Gemini 2.5 Flash Lite), "
+            f"Backups=[{backup_judge1.judge_id} (DeepSeek), {backup_judge2.judge_id} (Gemini 2.5 Flash), {backup_judge3.judge_id} (Gemini Flash Latest)]"
         )
     
     return _JUDGE_REGISTRY
