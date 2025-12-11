@@ -49,54 +49,43 @@ async def get_judge_registry() -> JudgeRegistry:
         
         _JUDGE_REGISTRY = JudgeRegistry(health_tracker=health_tracker)
         
-        # Register primary judge: DeepSeek (cheap, fast)
-        deepseek_client = await get_deepseek_client()
+        # Register primary judge: Gemini Flash Live (priority 0 - cheapest, fastest)
+        gemini_live_client = await get_gemini_backup2_client()
         primary_judge = JudgeModel(
-            judge_id="deepseek-judge-primary",
-            client=deepseek_client,
+            judge_id="gemini-flash-live-primary",
+            client=gemini_live_client,
             priority=0,
-            display_name="DeepSeek Judge (Primary)",
+            display_name="Gemini Flash Live (Primary Judge)",
             temperature=0.1
         )
         _JUDGE_REGISTRY.register_judge(primary_judge)
         
-        # Register backup judge 1: Anthropic Claude Haiku
-        anthropic_client = await get_anthropic_client()
+        # Register backup judge 1: DeepSeek (priority 1)
+        deepseek_client = await get_deepseek_client()
         backup_judge1 = JudgeModel(
-            judge_id="anthropic-judge-backup",
-            client=anthropic_client,
+            judge_id="deepseek-judge-backup1",
+            client=deepseek_client,
             priority=1,
-            display_name="Anthropic Judge (Backup 1)",
+            display_name="DeepSeek (Backup Judge 1)",
             temperature=0.1
         )
         _JUDGE_REGISTRY.register_judge(backup_judge1)
         
-        # Register backup judge 2: Gemini 2.5 Flash
-        gemini1_client = await get_gemini_backup1_client()
+        # Register backup judge 2: Gemini Flash (priority 2)
+        gemini_flash_client = await get_gemini_backup1_client()
         backup_judge2 = JudgeModel(
-            judge_id="gemini-judge-backup1",
-            client=gemini1_client,
+            judge_id="gemini-flash-backup2",
+            client=gemini_flash_client,
             priority=2,
-            display_name="Gemini Flash Judge (Backup 2)",
+            display_name="Gemini Flash (Backup Judge 2)",
             temperature=0.1
         )
         _JUDGE_REGISTRY.register_judge(backup_judge2)
         
-        # Register backup judge 3: Gemini 2.5 Flash Live
-        gemini2_client = await get_gemini_backup2_client()
-        backup_judge3 = JudgeModel(
-            judge_id="gemini-judge-backup2",
-            client=gemini2_client,
-            priority=3,
-            display_name="Gemini Flash Live Judge (Backup 3)",
-            temperature=0.1
-        )
-        _JUDGE_REGISTRY.register_judge(backup_judge3)
-        
         logger.info(
-            "✅ Judge registry initialized with 4 judges: "
-            f"Primary={primary_judge.judge_id}, "
-            f"Backups=[{backup_judge1.judge_id}, {backup_judge2.judge_id}, {backup_judge3.judge_id}]"
+            "✅ Judge registry initialized with 3 judges: "
+            f"Primary={primary_judge.judge_id} (Gemini Live), "
+            f"Backups=[{backup_judge1.judge_id} (DeepSeek), {backup_judge2.judge_id} (Gemini Flash)]"
         )
     
     return _JUDGE_REGISTRY

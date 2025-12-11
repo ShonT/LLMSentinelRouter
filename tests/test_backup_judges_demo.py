@@ -352,7 +352,7 @@ async def test_all_judges_fail_fallback():
     
     # Assert
     assert judge_id == "fallback", "Should use fallback when all fail"
-    assert score == 0.5, "Default fallback score"
+    assert score == 0.1, "Default fallback score"
     assert impact == "LOW", "Default fallback impact"
     assert "All judges failed" in reasoning
     

@@ -14,7 +14,14 @@ from .budget import BudgetKillSwitch
 from .judge import StingyJudge, complexity_to_route
 from .threshold import DynamicThreshold
 from .cycle_detector import CycleDetector
-from .clients import get_deepseek_client, get_anthropic_client, LLMResponse, LLMClientError
+from .clients import (
+    get_deepseek_client, 
+    get_anthropic_client, 
+    get_gemini_backup1_client,
+    get_gemini_backup2_client,
+    LLMResponse, 
+    LLMClientError
+)
 from .logging_audit import LoggingAudit
 from .config import settings
 from .database import get_db
@@ -131,28 +138,49 @@ class Router:
             cycle_detected,
         )
 
-        # 5. Select client and make the call
+        # 5. Select client and make the call with failover support
+        response = None
         if route_decision == "weak":
-            client = await get_deepseek_client()
-            model_used = "deepseek"
+            # Weak model chain: DeepSeek → Gemini Flash → Gemini Flash Live
+            weak_models = [
+                ("deepseek", get_deepseek_client),
+                ("gemini-flash", get_gemini_backup1_client),
+                ("gemini-flash-live", get_gemini_backup2_client),
+            ]
+            
+            for model_name, client_getter in weak_models:
+                try:
+                    client = await client_getter()
+                    model_used = model_name
+                    logger.debug(f"Trying weak model: {model_name}")
+                    response = await client.chat_completion(messages)
+                    break  # Success - exit loop
+                except Exception as e:
+                    logger.warning(f"Weak model {model_name} failed: {e}")
+                    if model_name == weak_models[-1][0]:  # Last model in chain
+                        logger.error(f"All weak models failed!")
+                        raise LLMClientError(f"All weak models unavailable: {e}")
+                    logger.info(f"Falling back to next weak model...")
         else:
-            client = await get_anthropic_client()
-            model_used = "anthropic"
-
-        try:
-            response: LLMResponse = await client.chat_completion(messages)
-        except LLMClientError as e:
-            logger.error(f"LLM call failed: {e}")
-            # Fallback: try the other model if the primary fails
-            fallback_model = "anthropic" if model_used == "deepseek" else "deepseek"
-            logger.info(f"Falling back to {fallback_model}")
-            if fallback_model == "deepseek":
-                client = await get_deepseek_client()
-                model_used = "deepseek"
-            else:
-                client = await get_anthropic_client()
-                model_used = "anthropic"
-            response = await client.chat_completion(messages)
+            # Strong model chain: Anthropic → Gemini Flash
+            strong_models = [
+                ("anthropic", get_anthropic_client),
+                ("gemini-flash", get_gemini_backup1_client),
+            ]
+            
+            for model_name, client_getter in strong_models:
+                try:
+                    client = await client_getter()
+                    model_used = model_name
+                    logger.debug(f"Trying strong model: {model_name}")
+                    response = await client.chat_completion(messages)
+                    break  # Success - exit loop
+                except Exception as e:
+                    logger.warning(f"Strong model {model_name} failed: {e}")
+                    if model_name == strong_models[-1][0]:  # Last model in chain
+                        logger.error(f"All strong models failed!")
+                        raise LLMClientError(f"All strong models unavailable: {e}")
+                    logger.info(f"Falling back to next strong model...")
 
         # 6. Update cycle detection with the response
         cycle_detector.add_request_response(prompt, response.content)
