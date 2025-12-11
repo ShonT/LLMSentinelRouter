@@ -164,6 +164,48 @@ class MetricsCollector:
         }
         self._write_metric(metric)
     
+    def record_strong_model_usage(
+        self, 
+        model_id: str, 
+        reason: str, 
+        complexity_score: float = None,
+        impact_scope: str = None,
+        threshold: float = None,
+        cycle_detected: bool = False,
+        cycle_history: List[str] = None,
+        request_preview: str = None,
+        response_preview: str = None,
+        session_id: str = None
+    ):
+        """Record strong model usage with detailed reasoning."""
+        metric = {
+            "type": "strong_model_usage",
+            "timestamp": time.time(),
+            "model_id": model_id,
+            "reason": reason,
+            "session_id": session_id,
+        }
+        
+        # Add complexity info if available
+        if complexity_score is not None:
+            metric["complexity_score"] = complexity_score
+            metric["threshold"] = threshold
+            metric["impact_scope"] = impact_scope
+        
+        # Add cycle info if detected
+        if cycle_detected:
+            metric["cycle_detected"] = True
+            if cycle_history:
+                metric["cycle_history"] = cycle_history
+        
+        # Add request/response previews (truncated for storage)
+        if request_preview:
+            metric["request_preview"] = request_preview[:500]  # First 500 chars
+        if response_preview:
+            metric["response_preview"] = response_preview[:500]  # First 500 chars
+        
+        self._write_metric(metric)
+    
     def _write_metric(self, metric: Dict[str, Any]):
         """Write metric to file and in-memory buffer."""
         with self.lock:
@@ -198,6 +240,7 @@ class MetricsCollector:
             "fallback_counts": self._count_fallbacks(metrics),
             "cycle_detection_count": self._count_cycles(metrics),
             "tokens_per_second": self._aggregate_tps(metrics),
+            "strong_model_usages": self._get_strong_model_usages(metrics),
         }
         
         return stats
@@ -231,6 +274,10 @@ class MetricsCollector:
     def _count_cycles(self, metrics: List[Dict]) -> int:
         """Count cycle detection occurrences."""
         return len([m for m in metrics if m.get("type") == "cycle_detection"])
+    
+    def _get_strong_model_usages(self, metrics: List[Dict]) -> List[Dict[str, Any]]:
+        """Get strong model usage events."""
+        return [m for m in metrics if m.get("type") == "strong_model_usage"]
     
     def _aggregate_tps(self, metrics: List[Dict]) -> Dict[str, Any]:
         """Aggregate tokens per second metrics."""

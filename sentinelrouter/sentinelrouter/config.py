@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # Budget & routing
     max_cost_per_session: float = Field(10.0, env="MAX_COST_PER_SESSION")
-    initial_threshold: float = Field(0.7, env="INITIAL_THRESHOLD")
+    initial_threshold: float = Field(0.9, env="INITIAL_THRESHOLD")
     escalation_rate_limit: float = Field(0.05, env="ESCALATION_RATE_LIMIT")
 
     # Complexity threshold (for judge)

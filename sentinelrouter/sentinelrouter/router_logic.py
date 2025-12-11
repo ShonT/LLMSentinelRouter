@@ -225,6 +225,26 @@ class Router:
             ]
             
             primary_model = strong_models[0][0]
+            
+            # Log why strong model was selected
+            reason_detail = self._build_decision_reason(
+                "strong", complexity_score, impact_scope, threshold, strict_mode, cycle_detected
+            )
+            
+            # Get cycle history if cycle was detected
+            cycle_history = None
+            if cycle_detected and hasattr(cycle_detector, 'recent_hashes'):
+                cycle_history = [str(h[0]) for h in list(cycle_detector.recent_hashes)[-5:]]  # Last 5 hashes
+            
+            logger.info(
+                f"🔴 STRONG MODEL SELECTED - Session: {session_id}, "
+                f"Reason: {reason_detail}, "
+                f"Complexity: {complexity_score:.3f}, "
+                f"Impact: {impact_scope}, "
+                f"Threshold: {threshold:.3f}, "
+                f"Cycle: {cycle_detected}"
+            )
+            
             for idx, (model_name, client_getter) in enumerate(strong_models):
                 # Check if model is banned
                 if throttle_manager.is_banned(model_name):
@@ -254,6 +274,23 @@ class Router:
                         if total_tokens > 0 and latency_ms > 0:
                             tps = total_tokens / (latency_ms / 1000)
                             metrics.record_tokens_per_second(model_name, "strong", tps, total_tokens)
+                    
+                    # Record detailed strong model usage
+                    request_text = messages[-1].get('content', '') if messages else prompt
+                    response_text = response.content if hasattr(response, 'content') else str(response)
+                    
+                    metrics.record_strong_model_usage(
+                        model_id=model_name,
+                        reason=reason_detail,
+                        complexity_score=complexity_score,
+                        impact_scope=impact_scope,
+                        threshold=threshold,
+                        cycle_detected=cycle_detected,
+                        cycle_history=cycle_history,
+                        request_preview=request_text,
+                        response_preview=response_text,
+                        session_id=session_id
+                    )
                     
                     # Record fallback if not using primary
                     if idx > 0:

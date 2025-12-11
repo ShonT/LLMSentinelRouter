@@ -38,10 +38,11 @@ ENV PATH=/home/sentinel/.local/bin:$PATH
 COPY --chown=sentinel:sentinel . .
 
 # Create necessary directories with proper permissions
-RUN mkdir -p data logs
+RUN mkdir -p data logs data/metrics
 
-# Expose the port the app runs on
+# Expose ports for API and dashboard
 EXPOSE 8000
+EXPOSE 8001
 
 # Set environment variables for production
 ENV PYTHONPATH=/home/sentinel/app
@@ -53,7 +54,5 @@ ENV DATABASE_URL=sqlite:////home/sentinel/app/data/sentinelrouter.db
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD python -c "import httpx; httpx.get('http://localhost:8000/health', timeout=2.0)" || exit 1
 
-# Run with gunicorn for production ASGI server
-# Using 2 workers (can be overridden via WORKERS environment variable)
-ENTRYPOINT ["/bin/bash", "-c"]
-CMD ["gunicorn --bind 0.0.0.0:8000 --worker-class uvicorn.workers.UvicornWorker --workers ${WORKERS:-2} --timeout 120 --access-logfile - sentinelrouter.sentinelrouter.server:app"]
+# Run with startup script that launches both servers
+CMD ["./start_servers.sh"]

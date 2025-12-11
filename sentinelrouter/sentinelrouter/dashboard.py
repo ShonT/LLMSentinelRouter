@@ -153,6 +153,99 @@ async def dashboard_home():
                 font-size: 0.9rem;
                 opacity: 0.8;
             }
+            .strong-model-section {
+                margin-top: 30px;
+            }
+            .section-title {
+                color: white;
+                font-size: 1.8rem;
+                margin-bottom: 20px;
+                text-align: center;
+            }
+            .escalations-table-wrapper {
+                background: white;
+                border-radius: 12px;
+                padding: 20px;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                overflow-x: auto;
+            }
+            .escalations-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 0.9rem;
+            }
+            .escalations-table thead {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+            }
+            .escalations-table th {
+                padding: 12px;
+                text-align: left;
+                font-weight: 600;
+                text-transform: uppercase;
+                font-size: 0.75rem;
+                letter-spacing: 0.5px;
+                white-space: nowrap;
+            }
+            .escalations-table td {
+                padding: 12px;
+                border-bottom: 1px solid #e5e7eb;
+                vertical-align: top;
+            }
+            .escalations-table tbody tr:hover {
+                background-color: #f9fafb;
+            }
+            .escalations-table tbody tr:last-child td {
+                border-bottom: none;
+            }
+            .timestamp-cell {
+                color: #6b7280;
+                font-size: 0.85rem;
+                white-space: nowrap;
+            }
+            .model-cell {
+                font-weight: 700;
+                color: #ef4444;
+            }
+            .reason-cell {
+                background: #fef3c7;
+                padding: 6px 10px;
+                border-radius: 6px;
+                font-size: 0.85rem;
+                color: #92400e;
+                font-weight: 500;
+                max-width: 300px;
+            }
+            .text-preview {
+                max-width: 400px;
+                max-height: 100px;
+                overflow-y: auto;
+                font-family: 'Courier New', monospace;
+                font-size: 0.8rem;
+                background: #f3f4f6;
+                padding: 8px;
+                border-radius: 6px;
+                line-height: 1.4;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }
+            .cycle-badge {
+                background: #fee2e2;
+                color: #991b1b;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-size: 0.75rem;
+                font-weight: 600;
+                display: inline-block;
+                margin-bottom: 4px;
+            }
+            .no-usage {
+                text-align: center;
+                color: white;
+                font-size: 1.1rem;
+                padding: 40px;
+                opacity: 0.7;
+            }
         </style>
     </head>
     <body>
@@ -186,6 +279,13 @@ async def dashboard_home():
                 <div class="chart-card">
                     <div class="chart-title">Tokens Per Second</div>
                     <canvas id="tpsChart"></canvas>
+                </div>
+            </div>
+            
+            <div class="strong-model-section">
+                <h2 class="section-title">🔴 Escalations to Strong Model</h2>
+                <div id="strongModelUsages">
+                    <div class="no-usage">No escalations recorded yet</div>
                 </div>
             </div>
             
@@ -297,6 +397,9 @@ async def dashboard_home():
                     // Update charts
                     updateCharts(data);
                     
+                    // Update strong model usage
+                    updateStrongModelUsages(data);
+                    
                     // Update timestamp
                     document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
                 } catch (error) {
@@ -383,6 +486,80 @@ async def dashboard_home():
                 charts.tps.data.labels = tpsMetrics.map((_, i) => i + 1);
                 charts.tps.data.datasets[0].data = tpsMetrics.map(m => m.tps);
                 charts.tps.update();
+            }
+            
+            function updateStrongModelUsages(data) {
+                const usages = data.aggregated_stats?.strong_model_usages || [];
+                const container = document.getElementById('strongModelUsages');
+                
+                if (usages.length === 0) {
+                    container.innerHTML = '<div class="no-usage">No escalations recorded yet</div>';
+                    return;
+                }
+                
+                // Show most recent usages (last 20) in reverse order (newest first)
+                const recentUsages = usages.slice(-20).reverse();
+                
+                const rows = recentUsages.map(usage => {
+                    const date = new Date(usage.timestamp * 1000);
+                    const timeStr = date.toLocaleString();
+                    
+                    // Build reason with cycle badge if applicable
+                    let reasonHtml = escapeHtml(usage.reason);
+                    if (usage.cycle_detected) {
+                        reasonHtml = '<span class="cycle-badge">⚠️ CYCLE DETECTED</span><br>' + reasonHtml;
+                        if (usage.cycle_history && usage.cycle_history.length > 0) {
+                            reasonHtml += '<br><small style="font-size:0.75rem;color:#7f1d1d;">Hashes: ' + 
+                                         usage.cycle_history.slice(-3).join(' → ') + '</small>';
+                        }
+                    }
+                    
+                    // Truncate and escape request/response
+                    const requestPreview = usage.request_preview ? 
+                        escapeHtml(usage.request_preview.substring(0, 200) + (usage.request_preview.length > 200 ? '...' : '')) : 
+                        '<em>N/A</em>';
+                    
+                    const responsePreview = usage.response_preview ? 
+                        escapeHtml(usage.response_preview.substring(0, 200) + (usage.response_preview.length > 200 ? '...' : '')) : 
+                        '<em>N/A</em>';
+                    
+                    return `
+                        <tr>
+                            <td class="timestamp-cell">${timeStr}</td>
+                            <td class="text-preview">${requestPreview}</td>
+                            <td class="text-preview">${responsePreview}</td>
+                            <td class="model-cell">${escapeHtml(usage.model_id)}</td>
+                            <td class="reason-cell">${reasonHtml}</td>
+                        </tr>
+                    `;
+                }).join('');
+                
+                const tableHtml = `
+                    <div class="escalations-table-wrapper">
+                        <table class="escalations-table">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Request</th>
+                                    <th>Response</th>
+                                    <th>Model</th>
+                                    <th>Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rows}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                
+                container.innerHTML = tableHtml;
+            }
+            
+            function escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
             }
             
             // Reset metrics function
