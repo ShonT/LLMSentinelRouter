@@ -22,6 +22,10 @@ from .models import RoutingDecision
 
 logger = logging.getLogger(__name__)
 
+# Global cache for cycle detectors (persistent across requests)
+# This ensures cycle detection works across multiple API calls
+_CYCLE_DETECTORS_CACHE: Dict[str, CycleDetector] = {}
+
 
 class Router:
     """
@@ -42,8 +46,8 @@ class Router:
         self.judge = StingyJudge()
         self.threshold = DynamicThreshold()
         self.audit = LoggingAudit(db_session)
-        # Cycle detectors are per session; we keep a simple dict cache
-        self.cycle_detectors: Dict[str, CycleDetector] = {}
+        # Cycle detectors are per session; use global cache to persist across Router instances
+        self.cycle_detectors = _CYCLE_DETECTORS_CACHE
 
     def _get_cycle_detector(self, session_id: str) -> CycleDetector:
         """Get or create a cycle detector for the given session."""
@@ -193,8 +197,8 @@ class Router:
         if cycle_detected:
             self.audit.log_cycle_detection(
                 session_id=session_id,
-                prompt_hash=prompt_hash_int,
-                response_hash=response_hash_int,
+                prompt_hash=str(prompt_hash_int),
+                response_hash=str(response_hash_int),
             )
             logger.warning(f"Cycle logged for session {session_id}")
 

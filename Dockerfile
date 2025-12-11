@@ -56,4 +56,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # Run with gunicorn for production ASGI server
 # Using 2 workers (can be overridden via WORKERS environment variable)
 ENTRYPOINT ["/bin/bash", "-c"]
-CMD ["gunicorn --bind 0.0.0.0:8000 --worker-class uvicorn.workers.UvicornWorker --workers ${WORKERS:-2} --timeout 120 --access-logfile - sentinelrouter.server:app"]
+CMD ["gunicorn --bind 0.0.0.0:8000 --worker-class uvicorn.workers.UvicornWorker --workers ${WORKERS:-2} --timeout 120 --access-logfile - sentinelrouter.sentinelrouter.server:app"]

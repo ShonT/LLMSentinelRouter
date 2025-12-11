@@ -337,13 +337,16 @@ class LoggingAudit:
             f"current cost {current_cost:.2f}, max {max_cost:.2f}"
         )
 
-    async def log_cycle_detection(self, session_id: str, hash_distance: int, action: str) -> None:
+    async def log_cycle_detection(self, session_id: str, prompt_hash: str, response_hash: str) -> None:
         """
         Log a cycle detection event.
         """
-        logging.warning(
-            f"Cycle detection in session {session_id}: "
-            f"hash_distance={hash_distance}, action={action}"
+        # Delegate to underlying audit logger
+        await asyncio.to_thread(
+            self.audit_logger.log_cycle_detection,
+            session_id=session_id,
+            prompt_hash=prompt_hash,
+            response_hash=response_hash,
         )
 
     async def log_threshold_adjustment(
