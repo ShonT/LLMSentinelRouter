@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .models import SemanticCacheEntry, SemanticCacheStats
-from .semantic_hash import semantic_hash_for_payload
+from .semantic_hash import compute_simhash, semantic_hash_for_payload
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +57,16 @@ class SemanticCache:
     def build_semantic_hash(self, prompt: str, context: Optional[Any] = None) -> str:
         context_str = _safe_context_string(context)
         simhash_int = semantic_hash_for_payload(prompt, context_str)
-        return f"{simhash_int:016x}"
+        width = max(1, (simhash_int.bit_length() + 3) // 4)
+        return f"{simhash_int:0{width}x}"
 
     def _build_context_hash(self, context: Optional[Any]) -> str:
         context_str = _safe_context_string(context)
-        return f"{semantic_hash_for_payload(context_str):016x}" if context_str else ""
+        if not context_str:
+            return ""
+        context_hash = compute_simhash(context_str)
+        width = max(1, (context_hash.bit_length() + 3) // 4)
+        return f"{context_hash:0{width}x}"
 
     # ------------------------------------------------------------------ Stats helpers
     def _get_or_create_stats(self, semantic_hash: str) -> SemanticCacheStats:
@@ -168,7 +173,8 @@ class SemanticCache:
         if stats is None or stats.total_calls < self.min_samples:
             return 0.0
 
-        dominant = max(stats.weak_calls, stats.strong_calls, stats.total_calls - stats.weak_calls - stats.strong_calls)
+        other_calls = max(0, stats.total_calls - stats.weak_calls - stats.strong_calls)
+        dominant = max(stats.weak_calls, stats.strong_calls, other_calls)
         confidence = dominant / stats.total_calls if stats.total_calls else 0.0
         return min(1.0, confidence)
 
@@ -187,6 +193,8 @@ class SemanticCache:
             (stats.total_latency_ms_sq / stats.total_calls) - (mean_latency ** 2)
             if stats.total_calls else 0.0
         )
+        # Guard against floating point drift
+        variance_latency = max(0.0, variance_latency)
 
         return {
             "semantic_hash": semantic_hash,
@@ -195,7 +203,7 @@ class SemanticCache:
             "strong_calls": stats.strong_calls,
             "judge_invocations": stats.judge_invocations,
             "mean_latency_ms": mean_latency,
-            "latency_variance_ms": max(0.0, variance_latency),
+            "latency_variance_ms": variance_latency,
             "total_cost": stats.total_cost,
             "total_tokens": stats.total_tokens,
             "last_model": stats.last_model,
@@ -209,7 +217,11 @@ class SemanticCache:
         if not self.ttl_seconds:
             return
         cutoff = datetime.utcnow() - timedelta(seconds=self.ttl_seconds)
-        removed_entries = self.db.query(SemanticCacheEntry).filter(SemanticCacheEntry.created_at < cutoff).delete()
+        removed_entries = (
+            self.db.query(SemanticCacheEntry)
+            .filter(SemanticCacheEntry.created_at < cutoff)
+            .delete(synchronize_session=False)
+        )
         stale_stats = self.db.query(SemanticCacheStats).filter(SemanticCacheStats.last_called_at < cutoff).all()
         for stat in stale_stats:
             self.db.delete(stat)

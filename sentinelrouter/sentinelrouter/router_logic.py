@@ -401,10 +401,11 @@ class Router:
             cost=response.cost,
             total_tokens=total_tokens,
         )
+        # Record events are writes, not cache hits
         metrics.record_semantic_cache_event(
             "record",
             stats.semantic_hash,
-            True,
+            False,
             self.semantic_cache.confidence_for_hash(stats.semantic_hash),
         )
 

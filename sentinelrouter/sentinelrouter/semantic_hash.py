@@ -43,8 +43,6 @@ def hamming_distance(a: int, b: int, hash_bits: int = 64) -> int:
     while xor:
         distance += xor & 1
         xor >>= 1
-        if distance > hash_bits:
-            break
     return distance
 
 
