@@ -1,0 +1,226 @@
+"""
+State Manager with write‑behind persistence.
+
+Holds the unified configuration in memory, tracks dirty state, and periodically
+flushes changes to disk using atomic writes.
+"""
+
+import asyncio
+import json
+import logging
+import os
+import tempfile
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Dict, Set, Optional, Any, Union
+
+from .config import get_unified_config, settings
+from ..schemas.config_models import UnifiedConfig, ModelConfig, ModelState
+
+logger = logging.getLogger(__name__)
+
+
+class StateManager:
+    """
+    Manages in‑memory model state with write‑behind persistence.
+
+    Attributes:
+        config: The current unified configuration (immutable part).
+        dirty: Set of model IDs that have been modified since last flush.
+        lock: asyncio.Lock for thread‑safe mutations.
+        task: Background task that runs the periodic flush.
+        stop_event: Event to signal the background task to stop.
+    """
+
+    def __init__(self, config: UnifiedConfig):
+        self.config = config
+        self.dirty: Set[str] = set()
+        self.lock = asyncio.Lock()
+        self.task: Optional[asyncio.Task] = None
+        self.stop_event = asyncio.Event()
+
+    def start(self) -> None:
+        """Start the background flush task."""
+        if self.task is None or self.task.done():
+            self.task = asyncio.create_task(self._flush_loop())
+            logger.info("StateManager background flush task started")
+
+    async def stop(self) -> None:
+        """Stop the background flush task and perform a final flush."""
+        self.stop_event.set()
+        if self.task and not self.task.done():
+            await self.task
+        # Final flush to ensure no dirty data is lost
+        await self._flush_dirty()
+        logger.info("StateManager stopped")
+
+    async def _flush_loop(self) -> None:
+        """Background loop that flushes dirty state every N seconds."""
+        interval = self.config.system_settings.persistence_interval_seconds
+        while not self.stop_event.is_set():
+            await asyncio.sleep(interval)
+            await self._flush_dirty()
+
+    async def _flush_dirty(self) -> None:
+        """
+        Flush all dirty model states to disk.
+
+        This method:
+          1. Acquires the lock and copies the dirty set.
+          2. Writes the entire config to a temporary file.
+          3. Atomically renames the temporary file to the target path.
+          4. Clears the dirty set.
+        """
+        async with self.lock:
+            if not self.dirty:
+                return
+            dirty_copy = set(self.dirty)
+            self.dirty.clear()
+
+        try:
+            # Write the entire config (not just dirty models) to ensure consistency
+            await self._atomic_write()
+            logger.debug(
+                f"Flushed dirty models {dirty_copy} to {settings.models_config_path}"
+            )
+        except Exception as e:
+            # Re-add dirty models because the write failed
+            async with self.lock:
+                self.dirty.update(dirty_copy)
+            logger.error(f"Failed to flush dirty state: {e}")
+
+    async def _atomic_write(self) -> None:
+        """Write the current config to disk atomically."""
+        target_path = settings.models_config_path
+        # Create a temporary file in the same directory for atomic rename
+        temp_fd, temp_path = tempfile.mkstemp(
+            suffix=".tmp", dir=os.path.dirname(target_path), text=True
+        )
+        try:
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                json.dump(self.config.model_dump(), f, indent=2, default=str)
+            # Atomic rename (POSIX guarantee)
+            os.replace(temp_path, target_path)
+        except Exception:
+            # If anything goes wrong, clean up the temporary file
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            raise
+
+    async def get_model_config(self, model_id: str) -> Optional[ModelConfig]:
+        """Return the configuration for a model (read‑only)."""
+        return self.config.models.get(model_id)
+
+    async def get_model_state(self, model_id: str) -> Optional[ModelState]:
+        """Return the current state of a model (read‑only)."""
+        model = self.config.models.get(model_id)
+        return model.state if model else None
+
+    async def update_model_state(
+        self, model_id: str, **updates: Dict[str, Any]
+    ) -> bool:
+        """
+        Update the state of a model and mark it as dirty.
+
+        Updates are applied to the ModelState object. Only fields that exist
+        in ModelState can be updated.
+
+        Returns True if the update succeeded, False if the model does not exist.
+        """
+        async with self.lock:
+            model = self.config.models.get(model_id)
+            if model is None:
+                logger.warning(f"Attempted to update non‑existent model {model_id}")
+                return False
+
+            # Apply updates to the state
+            state_dict = model.state.model_dump()
+            for key, value in updates.items():
+                if key in state_dict:
+                    state_dict[key] = value
+                else:
+                    logger.warning(
+                        f"Ignoring invalid state field '{key}' for model {model_id}"
+                    )
+            # Create a new ModelState instance
+            new_state = ModelState(**state_dict)
+            # Replace the model's state (ModelConfig is immutable, so we must replace the whole model)
+            # We create a new ModelConfig with the updated state
+            updated_model = ModelConfig(
+                display_name=model.display_name,
+                provider=model.provider,
+                status=model.status,
+                capabilities=model.capabilities,
+                routing=model.routing,
+                limits=model.limits,
+                pricing=model.pricing,
+                state=new_state,
+            )
+            self.config.models[model_id] = updated_model
+            self.dirty.add(model_id)
+            logger.debug(f"Updated state for model {model_id}, marked dirty")
+            return True
+
+    async def increment_counter(
+        self, model_id: str, counter: str, amount: Union[int, float] = 1
+    ) -> bool:
+        """
+        Increment a numeric counter in the model's state (e.g., requests_today).
+
+        This is a convenience method that updates the counter and marks the model dirty.
+        """
+        current_state = await self.get_model_state(model_id)
+        if current_state is None:
+            return False
+
+        current_value = getattr(current_state, counter, None)
+        if isinstance(current_value, (int, float)):
+            new_value = current_value + amount
+            return await self.update_model_state(model_id, **{counter: new_value})
+        else:
+            logger.error(
+                f"Cannot increment non‑numeric counter {counter} for model {model_id}"
+            )
+            return False
+
+    async def get_all_models(self) -> Dict[str, ModelConfig]:
+        """Return a copy of all model configurations (read‑only)."""
+        return dict(self.config.models)
+
+    async def get_dirty_count(self) -> int:
+        """Return the number of currently dirty models."""
+        async with self.lock:
+            return len(self.dirty)
+
+    async def force_flush(self) -> None:
+        """Immediately flush all dirty models to disk."""
+        await self._flush_dirty()
+
+
+# Global instance
+_state_manager: Optional[StateManager] = None
+
+
+async def get_state_manager() -> StateManager:
+    """
+    Get or create the global StateManager instance.
+    """
+    global _state_manager
+    if _state_manager is None:
+        config = get_unified_config()
+        _state_manager = StateManager(config)
+        _state_manager.start()
+        logger.info("StateManager initialized")
+    return _state_manager
+
+
+@asynccontextmanager
+async def state_manager_context():
+    """
+    Context manager that ensures the StateManager is properly stopped.
+    """
+    sm = await get_state_manager()
+    try:
+        yield sm
+    finally:
+        await sm.stop()

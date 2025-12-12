@@ -1,12 +1,15 @@
 """
 Configuration management for SentinelRouter.
-Loads environment variables with sensible defaults.
+Loads environment variables with sensible defaults and the unified JSON configuration.
 """
 
 import os
+import json
 from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+from ..schemas.config_models import UnifiedConfig, ModelConfig
 
 
 class Settings(BaseSettings):
@@ -22,7 +25,7 @@ class Settings(BaseSettings):
     gemini_backup1_api_key: str = Field("AIzaSyCmm7euC6vHz39nJXEZAkqqJeUIB1rtVI8", env="GEMINI_BACKUP1_API_KEY")
     gemini_backup2_api_key: str = Field("AIzaSyBEgIiciMs-NIQqeoYtOfjkvCzVIAr5Fw8", env="GEMINI_BACKUP2_API_KEY")
 
-    # Model identifiers
+    # Model identifiers (kept for backward compatibility)
     weak_model_id: str = Field("deepseek-chat", env="WEAK_MODEL_ID")
     strong_model_id: str = Field("claude-3-opus-20240229", env="STRONG_MODEL_ID")
 
@@ -64,6 +67,9 @@ class Settings(BaseSettings):
     enable_cycle_detection: bool = Field(True, env="ENABLE_CYCLE_DETECTION")
     enable_dynamic_threshold: bool = Field(True, env="ENABLE_DYNAMIC_THRESHOLD")
 
+    # Unified configuration file path
+    models_config_path: str = Field("config/models_config.json", env="MODELS_CONFIG_PATH")
+
     # Hardcoded prices (per million tokens) - not configurable, defined in clients.py
     # DeepSeek: $0.27 per million tokens
     # Claude Opus: $5.00 per million tokens
@@ -84,3 +90,49 @@ def get_database_url() -> str:
     if settings.database_url:
         return settings.database_url
     return f"sqlite:///{settings.database_path}"
+
+
+def load_unified_config() -> UnifiedConfig:
+    """
+    Load the unified configuration from the JSON file specified in settings.
+    If the file does not exist, create a default configuration and write it.
+    """
+    path = settings.models_config_path
+    if not os.path.exists(path):
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Create a default configuration with the two main models
+        default_config = UnifiedConfig(
+            system_settings={},
+            models={
+                settings.weak_model_id: ModelConfig(
+                    display_name="DeepSeek Chat (Weak Tier)",
+                    provider="deepseek",
+                ),
+                settings.strong_model_id: ModelConfig(
+                    display_name="Claude 3 Opus (Strong Tier)",
+                    provider="anthropic",
+                ),
+            },
+        )
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(default_config.model_dump_json(indent=2))
+        return default_config
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return UnifiedConfig(**data)
+
+
+# Global instance of the unified configuration (static part)
+_unified_config: Optional[UnifiedConfig] = None
+
+
+def get_unified_config() -> UnifiedConfig:
+    """
+    Get the unified configuration (cached).
+    """
+    global _unified_config
+    if _unified_config is None:
+        _unified_config = load_unified_config()
+    return _unified_config
