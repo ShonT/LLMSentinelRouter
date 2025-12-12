@@ -4,7 +4,8 @@ Tests the cycle detection and SimHash functionality.
 """
 
 import pytest
-from sentinelrouter.sentinelrouter.cycle_detector import CycleDetector, _compute_simhash, _hamming_distance
+from sentinelrouter.sentinelrouter.cycle_detector import CycleDetector
+from sentinelrouter.sentinelrouter.semantic_hash import compute_simhash, hamming_distance
 
 
 class TestCycleDetector:
@@ -34,8 +35,8 @@ class TestCycleDetector:
         text1 = "What is the capital of France?"
         text2 = "What is the capital of France?"
         
-        hash1 = _compute_simhash(text1)
-        hash2 = _compute_simhash(text2)
+        hash1 = compute_simhash(text1)
+        hash2 = compute_simhash(text2)
         
         assert hash1 == hash2
     
@@ -44,8 +45,8 @@ class TestCycleDetector:
         text1 = "What is the capital of France?"
         text2 = "What is the capital of Germany?"
         
-        hash1 = _compute_simhash(text1)
-        hash2 = _compute_simhash(text2)
+        hash1 = compute_simhash(text1)
+        hash2 = compute_simhash(text2)
         
         assert hash1 != hash2
     
@@ -54,11 +55,11 @@ class TestCycleDetector:
         text1 = "What is the capital of France?"
         text2 = "What is capital of France?"  # Minor difference
         
-        hash1 = _compute_simhash(text1)
-        hash2 = _compute_simhash(text2)
+        hash1 = compute_simhash(text1)
+        hash2 = compute_simhash(text2)
         
         # Should be different but similar (low hamming distance relative to 64 bits)
-        distance = _hamming_distance(hash1, hash2)
+        distance = hamming_distance(hash1, hash2)
         # With SHA-256 based SimHash, similarity is less predictable
         # Just verify they're different but not completely different
         assert distance > 0  # Should be different
@@ -66,7 +67,7 @@ class TestCycleDetector:
     
     def test_compute_simhash_empty_string(self):
         """Test SimHash with empty string."""
-        hash_val = _compute_simhash("")
+        hash_val = compute_simhash("")
         assert hash_val == 0
     
     def test_hamming_distance_identical(self):
@@ -74,7 +75,7 @@ class TestCycleDetector:
         hash1 = 0b1010101010
         hash2 = 0b1010101010
         
-        distance = _hamming_distance(hash1, hash2)
+        distance = hamming_distance(hash1, hash2)
         assert distance == 0
     
     def test_hamming_distance_one_bit(self):
@@ -82,7 +83,7 @@ class TestCycleDetector:
         hash1 = 0b1010101010
         hash2 = 0b1010101011  # Last bit different
         
-        distance = _hamming_distance(hash1, hash2)
+        distance = hamming_distance(hash1, hash2)
         assert distance == 1
     
     def test_hamming_distance_all_different(self):
@@ -90,7 +91,7 @@ class TestCycleDetector:
         hash1 = 0b1111111111
         hash2 = 0b0000000000
         
-        distance = _hamming_distance(hash1, hash2)
+        distance = hamming_distance(hash1, hash2)
         assert distance == 10
     
     def test_detect_cycle_no_history(self):
@@ -221,12 +222,12 @@ class TestCycleDetector:
     def test_whitespace_handling(self):
         """Test handling of extra whitespace."""
         detector = CycleDetector(session_id="test_session")
-        
+
         prompt1 = "What is the capital of France?"
         prompt2 = "What    is   the   capital   of   France?"
-        
-        hash1 = _compute_simhash(prompt1)
-        hash2 = _compute_simhash(prompt2)
+
+        hash1 = compute_simhash(prompt1)
+        hash2 = compute_simhash(prompt2)
         
         # Should be similar but may not be identical
         # due to tokenization differences

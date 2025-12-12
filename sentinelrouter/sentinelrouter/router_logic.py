@@ -31,6 +31,7 @@ from .models import RoutingDecision
 from .metrics import get_metrics_collector
 from .throttle_manager import get_throttle_manager
 from .state_manager import get_state_manager
+from .semantic_cache import SemanticCache
 
 logger = logging.getLogger(__name__)
 metrics = get_metrics_collector()
@@ -62,6 +63,7 @@ class Router:
         # Cycle detectors are per session; use global cache to persist across Router instances
         self.cycle_detectors = _CYCLE_DETECTORS_CACHE
         self.state_manager = None  # Will be set async
+        self.semantic_cache = SemanticCache(db_session)
 
     async def _ensure_state_manager(self):
         if self.state_manager is None:
@@ -94,9 +96,16 @@ class Router:
             - cycle_detected: bool
             - decision_reason: str
         """
+        route_start = time.time()
         await self._ensure_state_manager()
         request_id = request_id or str(uuid.uuid4())
         logger.info(f"Processing request {request_id} for session {session_id}")
+
+        semantic_hash = self.semantic_cache.build_semantic_hash(prompt, messages)
+        cached_stats = self.semantic_cache.get_stats_for_prompt(prompt, messages)
+        cache_hit = cached_stats is not None
+        cache_confidence = self.semantic_cache.confidence_for_hash(semantic_hash) if cache_hit else 0.0
+        metrics.record_semantic_cache_event("lookup", semantic_hash, cache_hit, cache_confidence)
 
         # 1. Budget check (Module A)
         # Estimate worst-case cost (strong model) to check budget.
@@ -115,8 +124,11 @@ class Router:
             logger.warning(f"Cycle detected for session {session_id}. Overriding to strong model.")
 
         # 3. Judge (Module B)
+        judge_latency_ms: Optional[float] = None
         try:
+            judge_start = time.time()
             complexity_score, impact_scope, reasoning = await self.judge.judge(prompt)
+            judge_latency_ms = (time.time() - judge_start) * 1000
         except Exception as e:
             logger.error(f"Judge failed: {e}. Falling back to default categorization.")
             complexity_score, impact_scope, reasoning = 0.5, "LOW", "Judge failed, using default."
@@ -336,7 +348,7 @@ class Router:
         import hashlib
         prompt_hash_int = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16)
         response_hash_int = int(hashlib.sha256(response.content.encode()).hexdigest()[:8], 16)
-        
+
         self.audit.log_routing_decision(
             session_id=session_id,
             request_id=request_id,
@@ -370,6 +382,31 @@ class Router:
             hash_distance = cycle_detector.recent_hashes[-1][0] if cycle_detector.recent_hashes else 0
             metrics.record_cycle_detection(session_id, hash_distance)
             logger.warning(f"Cycle logged for session {session_id}")
+
+        # 11. Record semantic cache entry with full request/response metadata
+        total_latency_ms = (time.time() - route_start) * 1000
+        total_tokens = (
+            response.usage.get("total_tokens", 0) if hasattr(response, "usage") and response.usage else 0
+        )
+        stats = self.semantic_cache.record_interaction(
+            prompt=prompt,
+            context=messages,
+            response_text=response.content,
+            model_used=model_used,
+            latency_ms=total_latency_ms,
+            judge_invoked=True,
+            judge_latency_ms=judge_latency_ms,
+            complexity_score=complexity_score,
+            impact_scope=impact_scope,
+            cost=response.cost,
+            total_tokens=total_tokens,
+        )
+        metrics.record_semantic_cache_event(
+            "record",
+            stats.semantic_hash,
+            True,
+            self.semantic_cache.confidence_for_hash(stats.semantic_hash),
+        )
 
         return {
             "model_used": model_used,

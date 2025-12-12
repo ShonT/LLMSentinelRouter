@@ -7,8 +7,6 @@ blocks repetitive cycles.
 """
 
 import logging
-import hashlib
-import binascii
 from typing import Optional, List, Tuple, Set
 from datetime import datetime, timedelta
 
@@ -18,60 +16,9 @@ except ImportError:
     nx = None  # type: ignore
 
 from .config import settings
+from .semantic_hash import compute_simhash, hamming_distance
 
 logger = logging.getLogger(__name__)
-
-
-def _tokenize(text: str) -> List[str]:
-    """Simple tokenizer: split by whitespace and lowercase."""
-    return text.lower().split()
-
-
-def _compute_simhash(text: str, hash_bits: int = 64) -> int:
-    """
-    Compute a SimHash (semantic hash) of the input text.
-
-    Returns an integer of `hash_bits` bits.
-    """
-    # Initialize vector of zeros
-    v = [0] * hash_bits
-    tokens = _tokenize(text)
-    if not tokens:
-        return 0
-
-    for token in tokens:
-        # Compute a 64-bit hash of the token
-        # Use SHA-256 for better collision resistance (first 8 bytes = 64 bits)
-        h = hashlib.sha256(token.encode()).digest()
-        # Convert to integer
-        bitmask = int.from_bytes(h[:8], byteorder='big', signed=False)
-        # For each bit position
-        for i in range(hash_bits):
-            bit = (bitmask >> i) & 1
-            if bit == 1:
-                v[i] += 1
-            else:
-                v[i] -= 1
-
-    # Now reduce the vector to a bitset
-    simhash = 0
-    for i in range(hash_bits):
-        if v[i] >= 0:
-            simhash |= (1 << i)
-    return simhash
-
-
-def _hamming_distance(a: int, b: int, hash_bits: int = 64) -> int:
-    """Compute Hamming distance between two integers of `hash_bits` bits."""
-    xor = a ^ b
-    distance = 0
-    while xor:
-        distance += xor & 1
-        xor >>= 1
-        if distance > hash_bits:  # safety
-            break
-    return distance
-
 
 class CycleDetector:
     """
@@ -106,7 +53,7 @@ class CycleDetector:
         Compute SimHash of (User Prompt + Last Assistant Response).
         """
         combined = prompt + "\n---\n" + response
-        return _compute_simhash(combined)
+        return compute_simhash(combined)
 
     def add_request_response(self, prompt: str, response: str, timestamp: Optional[datetime] = None) -> bool:
         """
@@ -164,7 +111,7 @@ class CycleDetector:
         Detect if current hash is similar (distance < threshold) to any recent hash.
         """
         for existing_hash, _ in self.recent_hashes:
-            dist = _hamming_distance(current_hash, existing_hash)
+            dist = hamming_distance(current_hash, existing_hash)
             if dist < self.simhash_threshold:
                 return True
         return False

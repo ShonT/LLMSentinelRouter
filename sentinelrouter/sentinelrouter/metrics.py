@@ -163,7 +163,19 @@ class MetricsCollector:
             "total_tokens": total_tokens
         }
         self._write_metric(metric)
-    
+
+    def record_semantic_cache_event(self, event: str, semantic_hash: str, hit: bool, confidence: float):
+        """Record semantic cache lookup/record events."""
+        metric = {
+            "type": "semantic_cache",
+            "timestamp": time.time(),
+            "event": event,
+            "semantic_hash": semantic_hash,
+            "hit": hit,
+            "confidence": confidence,
+        }
+        self._write_metric(metric)
+
     def record_strong_model_usage(
         self, 
         model_id: str, 
@@ -241,8 +253,9 @@ class MetricsCollector:
             "cycle_detection_count": self._count_cycles(metrics),
             "tokens_per_second": self._aggregate_tps(metrics),
             "strong_model_usages": self._get_strong_model_usages(metrics),
+            "semantic_cache": self._aggregate_semantic_cache(metrics),
         }
-        
+
         return stats
     
     def _aggregate_latency(self, metrics: List[Dict], metric_type: str) -> Dict[str, Any]:
@@ -293,7 +306,24 @@ class MetricsCollector:
             "avg": sum(tps_values) / len(tps_values),
             "total_tokens": total_tokens,
         }
-    
+
+    def _aggregate_semantic_cache(self, metrics: List[Dict]) -> Dict[str, Any]:
+        """Aggregate semantic cache hit/miss information."""
+        cache_events = [m for m in metrics if m.get("type") == "semantic_cache"]
+        if not cache_events:
+            return {"lookups": 0, "hits": 0, "misses": 0, "avg_confidence": 0.0}
+
+        hits = len([m for m in cache_events if m.get("hit")])
+        misses = len(cache_events) - hits
+        confidences = [m.get("confidence", 0.0) for m in cache_events]
+        avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
+        return {
+            "lookups": len(cache_events),
+            "hits": hits,
+            "misses": misses,
+            "avg_confidence": avg_conf,
+        }
+
     def reset_metrics(self):
         """Reset all metrics - clear in-memory buffer and delete metrics file."""
         with self.lock:
