@@ -201,16 +201,29 @@ class StateManager:
 _state_manager: Optional[StateManager] = None
 
 
-async def get_state_manager() -> StateManager:
+async def get_state_manager(reload: bool = False) -> StateManager:
     """
     Get or create the global StateManager instance.
+    
+    Args:
+        reload: If True, reload the config from disk even if StateManager exists.
     """
     global _state_manager
+    
+    if reload and _state_manager is not None:
+        # Reload config from disk
+        from .config import load_unified_config
+        new_config = load_unified_config()
+        _state_manager.config = new_config
+        logger.debug("StateManager config reloaded from disk")
+    
     if _state_manager is None:
-        config = get_unified_config()
+        from .config import load_unified_config
+        config = load_unified_config()
         _state_manager = StateManager(config)
         _state_manager.start()
         logger.info("StateManager initialized")
+    
     return _state_manager
 
 

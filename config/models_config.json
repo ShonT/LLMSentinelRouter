@@ -1,0 +1,163 @@
+{
+  "system_settings": {
+    "persistence_interval_seconds": 5,
+    "default_routing_strategy": "waterfall",
+    "timezone": "UTC"
+  },
+  "models": {
+    "deepseek-chat": {
+      "display_name": "DeepSeek Chat (Weak Tier)",
+      "provider": "deepseek",
+      "status": "active",
+      "capabilities": {
+        "modality": ["text"],
+        "context_window": 128000
+      },
+      "routing": {
+        "priority_group": "fast_tier",
+        "order": 1
+      },
+      "limits": {
+        "requests_per_minute": 30,
+        "requests_per_day": 3000,
+        "tokens_per_minute": 2000000
+      },
+      "pricing": {
+        "currency": "USD",
+        "input_cost_per_m": 0.27,
+        "output_cost_per_m": 0.27,
+        "usage_tiers": [
+          {
+            "name": "Free Tier",
+            "threshold_requests": 1500,
+            "input_cost": 0.0,
+            "output_cost": 0.0
+          },
+          {
+            "name": "Paid Tier",
+            "threshold_requests": "inf",
+            "input_cost": 0.27,
+            "output_cost": 0.27
+          }
+        ]
+      },
+      "state": {
+        "current_rpm": 0,
+        "requests_today": 0,
+        "tokens_today": 0,
+        "total_cost_session": 0.0,
+        "last_updated_ts": null,
+        "exhausted_until_ts": null
+      }
+    },
+    "claude-3-opus-20240229": {
+      "display_name": "Claude 3 Opus (Strong Tier)",
+      "provider": "anthropic",
+      "status": "active",
+      "capabilities": {
+        "modality": ["text"],
+        "context_window": 200000
+      },
+      "routing": {
+        "priority_group": "strong_tier",
+        "order": 1
+      },
+      "limits": {
+        "requests_per_minute": 10,
+        "requests_per_day": 1000,
+        "tokens_per_minute": 100000
+      },
+      "pricing": {
+        "currency": "USD",
+        "input_cost_per_m": 5.0,
+        "output_cost_per_m": 5.0,
+        "usage_tiers": [
+          {
+            "name": "Free Tier",
+            "threshold_requests": 100,
+            "input_cost": 0.0,
+            "output_cost": 0.0
+          },
+          {
+            "name": "Paid Tier",
+            "threshold_requests": "inf",
+            "input_cost": 5.0,
+            "output_cost": 5.0
+          }
+        ]
+      },
+      "state": {
+        "current_rpm": 0,
+        "requests_today": 0,
+        "tokens_today": 0,
+        "total_cost_session": 0.0,
+        "last_updated_ts": null,
+        "exhausted_until_ts": null
+      }
+    },
+    "gemini-2.5-flash": {
+      "display_name": "Gemini 2.5 Flash (Backup)",
+      "provider": "google",
+      "status": "active",
+      "capabilities": {
+        "modality": ["text", "image"],
+        "context_window": 1000000
+      },
+      "routing": {
+        "priority_group": "fast_tier",
+        "order": 2
+      },
+      "limits": {
+        "requests_per_minute": 15,
+        "requests_per_day": 1500,
+        "tokens_per_minute": 1000000
+      },
+      "pricing": {
+        "currency": "USD",
+        "input_cost_per_m": 0.10,
+        "output_cost_per_m": 0.10,
+        "usage_tiers": []
+      },
+      "state": {
+        "current_rpm": 0,
+        "requests_today": 0,
+        "tokens_today": 0,
+        "total_cost_session": 0.0,
+        "last_updated_ts": null,
+        "exhausted_until_ts": null
+      }
+    },
+    "gemini-2.5-flash-lite": {
+      "display_name": "Gemini 2.5 Flash Lite (Judge Primary)",
+      "provider": "google",
+      "status": "active",
+      "capabilities": {
+        "modality": ["text"],
+        "context_window": 1000000
+      },
+      "routing": {
+        "priority_group": "fast_tier",
+        "order": 3
+      },
+      "limits": {
+        "requests_per_minute": 20,
+        "requests_per_day": 2000,
+        "tokens_per_minute": 1000000
+      },
+      "pricing": {
+        "currency": "USD",
+        "input_cost_per_m": 0.0,
+        "output_cost_per_m": 0.0,
+        "usage_tiers": []
+      },
+      "state": {
+        "current_rpm": 0,
+        "requests_today": 0,
+        "tokens_today": 0,
+        "total_cost_session": 0.0,
+        "last_updated_ts": null,
+        "exhausted_until_ts": null
+      }
+    }
+  }
+}

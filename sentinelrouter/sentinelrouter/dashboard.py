@@ -1163,7 +1163,8 @@ async def dashboard_home():
 @dashboard_app.get("/api/dashboard/live")
 async def get_live_data():
     """Get live model state and configuration for Tab 1."""
-    state_manager = await get_state_manager()
+    # Reload config from disk to get latest state
+    state_manager = await get_state_manager(reload=True)
     # Use StateManager's config (which is the live, updated version)
     all_models = await state_manager.get_all_models()
     models = []
@@ -1239,29 +1240,48 @@ async def get_dashboard_metrics(db: Session = Depends(get_dbsession)):
     collector = get_metrics_collector()
     stats = collector.get_aggregated_stats()
     
-    # Get recent routing decisions for latency series
-    recent_logs = db.query(RoutingDecision)\
-                    .order_by(RoutingDecision.timestamp.desc())\
-                    .limit(50).all()
-    recent_logs.reverse()  # Chronological order
+    # Get recent metrics for latency time series
+    recent_metrics = collector.get_recent_metrics(limit=50)
     
-    # Build latency series from logs
+    # Build latency series from recent metrics
     judge_latencies = []
     weak_latencies = []
     strong_latencies = []
     labels = []
     
-    for i, log in enumerate(recent_logs):
-        labels.append(str(i + 1))
-        # Note: We don't have per-request latency in RoutingDecision table
-        # This would need to be tracked separately or added to the model
-        # For now, use placeholder data from stats
+    # Extract latency data points from metrics
+    for i, metric in enumerate(recent_metrics):
+        metric_type = metric.get('type', '')
+        latency = metric.get('latency_ms')
+        
+        # Only include latency metrics
+        if 'latency' in metric_type and latency is not None:
+            labels.append(str(i + 1))
+            
+            if metric_type == 'judge_latency':
+                judge_latencies.append(latency)
+                weak_latencies.append(None)
+                strong_latencies.append(None)
+            elif metric_type == 'weak_model_latency':
+                judge_latencies.append(None)
+                weak_latencies.append(latency)
+                strong_latencies.append(None)
+            elif metric_type == 'strong_model_latency':
+                judge_latencies.append(None)
+                weak_latencies.append(None)
+                strong_latencies.append(latency)
+    
+    # Pad to 50 points if needed
+    while len(labels) < 50:
+        idx = len(labels)
+        labels.append(str(idx + 1))
         judge_latencies.append(None)
         weak_latencies.append(None)
         strong_latencies.append(None)
     
-    # Count fallbacks from logs (where model_used is not the primary model)
-    total_fallbacks = stats.get('fallback_counts', {}).get('total', 0)
+    # Count fallbacks - sum all fallback types
+    fallback_counts = stats.get('fallback_counts', {})
+    total_fallbacks = sum(fallback_counts.values())
     
     return JSONResponse({
         "total_fallbacks": total_fallbacks,
