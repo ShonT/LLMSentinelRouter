@@ -112,10 +112,12 @@ class StingyJudge:
     - Backup judge: Anthropic Claude Haiku (if primary fails)
     - Circuit breaker to prevent retry storms
     - Health monitoring per judge
+    - Config-driven judge model selection via StateManager
     """
 
-    def __init__(self):
+    def __init__(self, state_manager=None):
         self._registry: Optional[JudgeRegistry] = None
+        self.state_manager = state_manager
 
     async def _ensure_registry(self):
         """Ensure judge registry is initialized."""
@@ -129,7 +131,18 @@ class StingyJudge:
         Evaluate the prompt and return (complexity_score, impact_scope, reasoning).
         
         Uses judge registry with automatic failover to backup judges if primary fails.
+        Honors is_judge_required flag from StateManager config.
         """
+        # Check if judge is required via StateManager config
+        if self.state_manager:
+            try:
+                judge_config = await self.state_manager.get_judge_config()
+                if not judge_config.is_judge_required:
+                    logger.info("Judge disabled by configuration (is_judge_required=false)")
+                    return 0.0, "LOW", "Judge disabled by configuration"
+            except Exception as e:
+                logger.warning(f"Failed to get judge config, proceeding with judge call: {e}")
+        
         await self._ensure_registry()
         
         # Use registry with failover

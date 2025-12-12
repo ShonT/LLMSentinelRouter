@@ -30,22 +30,30 @@ class BudgetKillSwitch:
         session_id: str,
         client_ip: Optional[str] = None,
         max_cost: Optional[float] = None,
+        tier: Optional[str] = None,
     ) -> Session:
         """
         Retrieve an existing session or create a new one.
+        
+        Args:
+            session_id: Unique session identifier
+            client_ip: Client IP address
+            max_cost: Maximum cost per session
+            tier: Session tier ('free', 'paid', 'premium')
         """
         session = self.db.query(Session).filter(Session.session_id == session_id).first()
         if not session:
             session = Session(
                 session_id=session_id,
                 client_ip=client_ip,
+                tier=tier or "free",  # Default to free tier
                 max_cost_per_session=max_cost or settings.max_cost_per_session,
                 current_cost=0.0,
                 is_active=True,
             )
             self.db.add(session)
             self.db.commit()
-            logger.info(f"Created new session {session_id} with budget {session.max_cost_per_session}")
+            logger.info(f"Created new session {session_id} with tier={session.tier}, budget={session.max_cost_per_session}")
         return session
 
     def check_budget(self, session_id: str, cost: float) -> bool:

@@ -100,6 +100,7 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = Field(None, ge=1)
     stream: Optional[bool] = False
     session_id: Optional[str] = Field(None, description="Custom session ID for tracking")
+    tier: Optional[str] = Field("free", description="User tier: 'free', 'paid', or 'premium'")
 
 class Usage(BaseModel):
     prompt_tokens: int
@@ -282,6 +283,7 @@ async def chat_completions(request: ChatCompletionRequest, fastapi_request: Requ
             messages=messages,
             request_id=str(uuid.uuid4()),
             client_ip=fastapi_request.client.host,
+            tier=request.tier,
         )
     except ValueError as e:
         # Budget exceeded or other business logic error

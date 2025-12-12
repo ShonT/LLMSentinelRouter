@@ -23,12 +23,18 @@ Base = declarative_base()
 
 class Session(Base):
     """
-    Represents a client session with a budget limit.
+    Represents a client session with a budget limit and tier.
+    
+    Tier determines rate limits:
+    - 'free': Lower rate limits (default)
+    - 'paid': Higher rate limits
+    - 'premium': Highest rate limits
     """
     __tablename__ = "sessions"
 
     session_id = Column(String, primary_key=True)
     client_ip = Column(String, nullable=True)
+    tier = Column(String, default="free", nullable=False)  # 'free', 'paid', 'premium'
     created_at = Column(DateTime, default=datetime.utcnow)
     max_cost_per_session = Column(Float, default=10.0)
     current_cost = Column(Float, default=0.0)

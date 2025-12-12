@@ -220,14 +220,22 @@ class StateManager:
             return True
 
     async def delete_model(self, model_id: str) -> bool:
-        """Delete a model from the configuration."""
+        """
+        Soft delete a model by marking it as BANNED.
+        
+        This preserves the model in historical logs and routing decisions
+        while preventing it from being used for new requests.
+        """
         async with self.lock:
             if model_id not in self.config.models:
                 logger.warning(f"Model {model_id} does not exist")
                 return False
-            del self.config.models[model_id]
+            
+            # Soft delete: mark as BANNED instead of removing
+            self.config.models[model_id].status = "BANNED"
+            self.config.models[model_id].status_valid_till = None  # Permanent ban
             self.dirty.add(model_id)
-            logger.info(f"Deleted model {model_id}")
+            logger.info(f"Soft-deleted model {model_id} (marked as BANNED)")
             return True
 
     async def update_model_config(self, model_id: str, **updates) -> bool:

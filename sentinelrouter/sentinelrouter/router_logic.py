@@ -57,17 +57,20 @@ class Router:
     def __init__(self, db_session: DBSession):
         self.db = db_session
         self.budget = BudgetKillSwitch(db_session)
-        self.judge = StingyJudge()
         self.threshold = DynamicThreshold()
         self.audit = LoggingAudit(db_session)
         # Cycle detectors are per session; use global cache to persist across Router instances
         self.cycle_detectors = _CYCLE_DETECTORS_CACHE
         self.state_manager = None  # Will be set async
         self.semantic_cache = SemanticCache(db_session)
+        self.judge = None  # Will be initialized with state_manager
 
     async def _ensure_state_manager(self):
         if self.state_manager is None:
             self.state_manager = await get_state_manager()
+            # Initialize judge with state_manager for config-driven behavior
+            if self.judge is None:
+                self.judge = StingyJudge(state_manager=self.state_manager)
 
     def _get_cycle_detector(self, session_id: str) -> CycleDetector:
         """Get or create a cycle detector for the given session."""
@@ -231,10 +234,36 @@ class Router:
                 logger.warning(f"Model {model_id} exhausted until {model_state.exhausted_until_ts}")
                 continue
 
-            # Check rate limits (simplified: if requests_today >= daily limit, skip)
-            if model_state and model_state.requests_today >= model_config.limits.requests_per_day:
-                logger.warning(f"Model {model_id} daily limit reached")
-                continue
+            # Check tier-based rate limits
+            if model_state and model_config.limits:
+                # Get session tier to determine which limits to use
+                session_obj = self.budget.get_or_create_session(session_id)
+                session_tier = getattr(session_obj, 'tier', 'free')
+                
+                # Select appropriate limits based on tier
+                if session_tier == 'free' and model_config.free_tier_limits:
+                    active_limits = model_config.free_tier_limits
+                elif session_tier in ('paid', 'premium') and model_config.paid_tier_limits:
+                    active_limits = model_config.paid_tier_limits
+                else:
+                    # Fallback to old limits field
+                    active_limits = model_config.limits
+                
+                # Check daily request limit
+                if model_state.requests_today >= active_limits.requests_per_day:
+                    logger.warning(
+                        f"Model {model_id} daily limit reached for {session_tier} tier "
+                        f"({model_state.requests_today}/{active_limits.requests_per_day})"
+                    )
+                    continue
+                
+                # Check RPM limit (simplified - would need time-windowed tracking for accuracy)
+                if model_state.current_rpm >= active_limits.requests_per_minute:
+                    logger.warning(
+                        f"Model {model_id} RPM limit reached for {session_tier} tier "
+                        f"({model_state.current_rpm}/{active_limits.requests_per_minute})"
+                    )
+                    continue
 
             client_getter = client_getters.get(model_id)
             if client_getter is None:
@@ -530,12 +559,24 @@ async def route_request(
     messages: list,
     request_id: Optional[str] = None,
     client_ip: Optional[str] = None,
+    tier: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     High-level function that creates a database session and routes a single request.
+    
+    Args:
+        session_id: Unique session identifier
+        prompt: User prompt text
+        messages: List of message dictionaries
+        request_id: Unique request identifier
+        client_ip: Client IP address
+        tier: User tier ('free', 'paid', 'premium')
     """
     with get_db() as db:
         router = Router(db)
+        # Ensure session exists with correct tier before routing
+        if tier:
+            router.budget.get_or_create_session(session_id, client_ip=client_ip, tier=tier)
         result = await router.route(session_id, prompt, messages, request_id, client_ip)
         return result
 
