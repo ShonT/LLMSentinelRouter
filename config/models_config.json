@@ -8,7 +8,10 @@
     "deepseek-chat": {
       "display_name": "DeepSeek Chat (Weak Tier)",
       "provider": "deepseek",
+      "model_definition": "DeepSeek's chat model optimized for fast responses",
+      "model_key": "deepseek-chat",
       "status": "active",
+      "status_valid_till": null,
       "capabilities": {
         "modality": ["text"],
         "context_window": 128000
@@ -21,6 +24,18 @@
         "requests_per_minute": 30,
         "requests_per_day": 3000,
         "tokens_per_minute": 2000000
+      },
+      "free_tier_limits": {
+        "requests_per_day": 1500,
+        "requests_per_minute": 15,
+        "tokens_per_minute": 1000000,
+        "tokens_per_day": 10000000
+      },
+      "paid_tier_limits": {
+        "requests_per_day": 10000,
+        "requests_per_minute": 60,
+        "tokens_per_minute": 5000000,
+        "tokens_per_day": 50000000
       },
       "pricing": {
         "currency": "USD",
@@ -41,6 +56,11 @@
           }
         ]
       },
+      "cost": {
+        "per_call": 0.0,
+        "per_token_input": 0.00000027,
+        "per_token_output": 0.00000027
+      },
       "state": {
         "current_rpm": 0,
         "requests_today": 0,
@@ -53,7 +73,10 @@
     "claude-3-opus-20240229": {
       "display_name": "Claude 3 Opus (Strong Tier)",
       "provider": "anthropic",
+      "model_definition": "Anthropic's most capable model for complex tasks",
+      "model_key": "claude-3-opus-20240229",
       "status": "active",
+      "status_valid_till": null,
       "capabilities": {
         "modality": ["text"],
         "context_window": 200000
@@ -66,6 +89,18 @@
         "requests_per_minute": 10,
         "requests_per_day": 1000,
         "tokens_per_minute": 100000
+      },
+      "free_tier_limits": {
+        "requests_per_day": 100,
+        "requests_per_minute": 5,
+        "tokens_per_minute": 50000,
+        "tokens_per_day": 500000
+      },
+      "paid_tier_limits": {
+        "requests_per_day": 5000,
+        "requests_per_minute": 50,
+        "tokens_per_minute": 500000,
+        "tokens_per_day": 5000000
       },
       "pricing": {
         "currency": "USD",
@@ -86,6 +121,11 @@
           }
         ]
       },
+      "cost": {
+        "per_call": 0.0,
+        "per_token_input": 0.000005,
+        "per_token_output": 0.000005
+      },
       "state": {
         "current_rpm": 0,
         "requests_today": 0,
@@ -98,7 +138,10 @@
     "gemini-2.5-flash": {
       "display_name": "Gemini 2.5 Flash (Backup)",
       "provider": "google",
+      "model_definition": "Google's fast multimodal model",
+      "model_key": "gemini-2.5-flash",
       "status": "active",
+      "status_valid_till": null,
       "capabilities": {
         "modality": ["text", "image"],
         "context_window": 1000000
@@ -112,11 +155,28 @@
         "requests_per_day": 1500,
         "tokens_per_minute": 1000000
       },
+      "free_tier_limits": {
+        "requests_per_day": 1500,
+        "requests_per_minute": 15,
+        "tokens_per_minute": 1000000,
+        "tokens_per_day": 10000000
+      },
+      "paid_tier_limits": {
+        "requests_per_day": 10000,
+        "requests_per_minute": 100,
+        "tokens_per_minute": 10000000,
+        "tokens_per_day": 100000000
+      },
       "pricing": {
         "currency": "USD",
         "input_cost_per_m": 0.10,
         "output_cost_per_m": 0.10,
         "usage_tiers": []
+      },
+      "cost": {
+        "per_call": 0.0,
+        "per_token_input": 0.0000001,
+        "per_token_output": 0.0000001
       },
       "state": {
         "current_rpm": 0,
@@ -130,7 +190,10 @@
     "gemini-2.5-flash-lite": {
       "display_name": "Gemini 2.5 Flash Lite (Judge Primary)",
       "provider": "google",
+      "model_definition": "Google's lightweight model for judge evaluations",
+      "model_key": "gemini-2.5-flash-lite",
       "status": "active",
+      "status_valid_till": null,
       "capabilities": {
         "modality": ["text"],
         "context_window": 1000000
@@ -144,11 +207,28 @@
         "requests_per_day": 2000,
         "tokens_per_minute": 1000000
       },
+      "free_tier_limits": {
+        "requests_per_day": 2000,
+        "requests_per_minute": 20,
+        "tokens_per_minute": 1000000,
+        "tokens_per_day": 10000000
+      },
+      "paid_tier_limits": {
+        "requests_per_day": 20000,
+        "requests_per_minute": 200,
+        "tokens_per_minute": 10000000,
+        "tokens_per_day": 100000000
+      },
       "pricing": {
         "currency": "USD",
         "input_cost_per_m": 0.0,
         "output_cost_per_m": 0.0,
         "usage_tiers": []
+      },
+      "cost": {
+        "per_call": 0.0,
+        "per_token_input": 0.0,
+        "per_token_output": 0.0
       },
       "state": {
         "current_rpm": 0,
@@ -159,5 +239,13 @@
         "exhausted_until_ts": null
       }
     }
+  },
+  "judge_config": {
+    "model_order": ["gemini-2.5-flash-lite", "gemini-2.5-flash"],
+    "is_judge_required": true
+  },
+  "routing_order_config": {
+    "strong_models": ["claude-3-opus-20240229"],
+    "weak_models": ["deepseek-chat", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
   }
 }

@@ -1394,6 +1394,120 @@ async def clear_routing_logs(db: Session = Depends(get_dbsession)):
     return JSONResponse({"status": "success", "message": "All logs cleared"})
 
 
+# ==================== Model Configuration CRUD Endpoints ====================
+
+@dashboard_app.post("/api/dashboard/models")
+async def create_model(request: dict):
+    """Create a new model configuration."""
+    from ..schemas.config_models import ModelConfig
+    state_manager = await get_state_manager()
+    
+    model_id = request.get("model_id")
+    if not model_id:
+        raise HTTPException(status_code=400, detail="model_id is required")
+    
+    # Validate model config
+    try:
+        model_config = ModelConfig(**request.get("config", {}))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid model config: {e}")
+    
+    success = await state_manager.add_model(model_id, model_config)
+    if not success:
+        raise HTTPException(status_code=409, detail=f"Model {model_id} already exists")
+    
+    return JSONResponse({
+        "status": "success",
+        "message": f"Model {model_id} created",
+        "model_id": model_id
+    })
+
+
+@dashboard_app.put("/api/dashboard/models/{model_id}")
+async def update_model(model_id: str, request: dict):
+    """Update an existing model configuration."""
+    state_manager = await get_state_manager()
+    
+    # Check if model exists
+    existing = await state_manager.get_model_config(model_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+    
+    # Update with provided fields
+    success = await state_manager.update_model_config(model_id, **request)
+    if not success:
+        raise HTTPException(status_code=400, detail="Update failed")
+    
+    return JSONResponse({
+        "status": "success",
+        "message": f"Model {model_id} updated"
+    })
+
+
+@dashboard_app.delete("/api/dashboard/models/{model_id}")
+async def delete_model(model_id: str):
+    """Delete a model configuration."""
+    state_manager = await get_state_manager()
+    
+    success = await state_manager.delete_model(model_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+    
+    return JSONResponse({
+        "status": "success",
+        "message": f"Model {model_id} deleted"
+    })
+
+
+@dashboard_app.put("/api/dashboard/judge-config")
+async def update_judge_config(request: dict):
+    """Update judge configuration."""
+    state_manager = await get_state_manager()
+    
+    success = await state_manager.update_judge_config(**request)
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to update judge config")
+    
+    return JSONResponse({
+        "status": "success",
+        "message": "Judge config updated",
+        "config": (await state_manager.get_judge_config()).model_dump()
+    })
+
+
+@dashboard_app.put("/api/dashboard/routing-order")
+async def update_routing_order(request: dict):
+    """Update routing order configuration (strong/weak models)."""
+    state_manager = await get_state_manager()
+    
+    success = await state_manager.update_routing_order_config(**request)
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to update routing order config")
+    
+    return JSONResponse({
+        "status": "success",
+        "message": "Routing order config updated",
+        "config": (await state_manager.get_routing_order_config()).model_dump()
+    })
+
+
+@dashboard_app.get("/api/dashboard/full-config")
+async def get_full_configuration():
+    """Get complete configuration including judge and routing order."""
+    config = get_unified_config()
+    state_manager = await get_state_manager()
+    
+    judge_config = await state_manager.get_judge_config()
+    routing_order_config = await state_manager.get_routing_order_config()
+    
+    return JSONResponse({
+        "system_settings": config.system_settings.model_dump(),
+        "models": {k: v.model_dump() for k, v in config.models.items()},
+        "judge_config": judge_config.model_dump(),
+        "routing_order_config": routing_order_config.model_dump()
+    })
+
+
 def start_dashboard_server(host: str = "0.0.0.0", port: int = 8001):
     """Start the enhanced dashboard server."""
     logger.info(f"Starting enhanced dashboard on http://{host}:{port}")

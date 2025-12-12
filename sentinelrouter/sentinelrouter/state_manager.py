@@ -11,11 +11,17 @@ import logging
 import os
 import tempfile
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Set, Optional, Any, Union
 
 from .config import get_unified_config, settings
-from ..schemas.config_models import UnifiedConfig, ModelConfig, ModelState
+from ..schemas.config_models import (
+    UnifiedConfig,
+    ModelConfig,
+    ModelState,
+    JudgeConfig,
+    RoutingOrderConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,15 +151,21 @@ class StateManager:
             # Create a new ModelState instance
             new_state = ModelState(**state_dict)
             # Replace the model's state (ModelConfig is immutable, so we must replace the whole model)
-            # We create a new ModelConfig with the updated state
+            # We create a new ModelConfig with the updated state and all other fields
             updated_model = ModelConfig(
                 display_name=model.display_name,
                 provider=model.provider,
+                model_definition=model.model_definition,
+                model_key=model.model_key,
                 status=model.status,
+                status_valid_till=model.status_valid_till,
                 capabilities=model.capabilities,
                 routing=model.routing,
                 limits=model.limits,
+                free_tier_limits=model.free_tier_limits,
+                paid_tier_limits=model.paid_tier_limits,
                 pricing=model.pricing,
+                cost=model.cost,
                 state=new_state,
             )
             self.config.models[model_id] = updated_model
@@ -195,6 +207,131 @@ class StateManager:
     async def force_flush(self) -> None:
         """Immediately flush all dirty models to disk."""
         await self._flush_dirty()
+
+    async def add_model(self, model_id: str, model_config: ModelConfig) -> bool:
+        """Add a new model to the configuration."""
+        async with self.lock:
+            if model_id in self.config.models:
+                logger.warning(f"Model {model_id} already exists")
+                return False
+            self.config.models[model_id] = model_config
+            self.dirty.add(model_id)
+            logger.info(f"Added model {model_id}")
+            return True
+
+    async def delete_model(self, model_id: str) -> bool:
+        """Delete a model from the configuration."""
+        async with self.lock:
+            if model_id not in self.config.models:
+                logger.warning(f"Model {model_id} does not exist")
+                return False
+            del self.config.models[model_id]
+            self.dirty.add(model_id)
+            logger.info(f"Deleted model {model_id}")
+            return True
+
+    async def update_model_config(self, model_id: str, **updates) -> bool:
+        """Update the configuration of a model (excluding state)."""
+        async with self.lock:
+            model = self.config.models.get(model_id)
+            if model is None:
+                logger.warning(f"Model {model_id} does not exist")
+                return False
+            # Create a new model config with updates
+            model_dict = model.model_dump()
+            for key, value in updates.items():
+                if key in model_dict:
+                    model_dict[key] = value
+                else:
+                    logger.warning(f"Ignoring unknown field {key} for model {model_id}")
+            # Reconstruct ModelConfig
+            updated_model = ModelConfig(**model_dict)
+            self.config.models[model_id] = updated_model
+            self.dirty.add(model_id)
+            logger.debug(f"Updated config for model {model_id}")
+            return True
+
+    async def ban_model(self, model_id: str, until: Optional[datetime] = None) -> bool:
+        """Ban a model until a given datetime (or indefinitely if None)."""
+        async with self.lock:
+            model = self.config.models.get(model_id)
+            if model is None:
+                logger.warning(f"Model {model_id} does not exist")
+                return False
+            model_dict = model.model_dump()
+            model_dict["status"] = "banned"
+            model_dict["status_valid_till"] = until
+            updated_model = ModelConfig(**model_dict)
+            self.config.models[model_id] = updated_model
+            self.dirty.add(model_id)
+            logger.info(f"Banned model {model_id} until {until}")
+            return True
+
+    async def unban_model(self, model_id: str) -> bool:
+        """Remove ban from a model, setting status to active."""
+        async with self.lock:
+            model = self.config.models.get(model_id)
+            if model is None:
+                logger.warning(f"Model {model_id} does not exist")
+                return False
+            model_dict = model.model_dump()
+            model_dict["status"] = "active"
+            model_dict["status_valid_till"] = None
+            updated_model = ModelConfig(**model_dict)
+            self.config.models[model_id] = updated_model
+            self.dirty.add(model_id)
+            logger.info(f"Unbanned model {model_id}")
+            return True
+
+    async def is_model_banned(self, model_id: str) -> bool:
+        """Check if a model is currently banned (status=banned and valid till not passed)."""
+        model = self.config.models.get(model_id)
+        if not model:
+            return False
+        if model.status != "banned":
+            return False
+        if model.status_valid_till is None:
+            return True
+        now = datetime.now(timezone.utc)
+        return now < model.status_valid_till
+
+    async def get_judge_config(self) -> JudgeConfig:
+        """Return the current judge configuration."""
+        return self.config.judge_config
+
+    async def update_judge_config(self, **updates) -> bool:
+        """Update judge configuration."""
+        async with self.lock:
+            config_dict = self.config.judge_config.model_dump()
+            for key, value in updates.items():
+                if key in config_dict:
+                    config_dict[key] = value
+                else:
+                    logger.warning(f"Ignoring unknown field {key} for judge config")
+            new_judge_config = JudgeConfig(**config_dict)
+            self.config.judge_config = new_judge_config
+            self.dirty.add("__config__")
+            logger.debug("Updated judge config")
+            return True
+
+    async def get_routing_order_config(self) -> RoutingOrderConfig:
+        """Return the current routing order configuration."""
+        return self.config.routing_order_config
+
+    async def update_routing_order_config(self, **updates) -> bool:
+        """Update routing order configuration."""
+        async with self.lock:
+            config_dict = self.config.routing_order_config.model_dump()
+            for key, value in updates.items():
+                if key in config_dict:
+                    config_dict[key] = value
+                else:
+                    logger.warning(f"Ignoring unknown field {key} for routing order config")
+            new_routing_order_config = RoutingOrderConfig(**config_dict)
+            self.config.routing_order_config = new_routing_order_config
+            self.dirty.add("__config__")
+            logger.debug("Updated routing order config")
+            return True
 
 
 # Global instance

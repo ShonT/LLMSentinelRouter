@@ -157,16 +157,36 @@ class Router:
         else:
             priority_group = "strong_tier"
 
-        # Get candidate models from StateManager
+        # Get candidate models from StateManager with new config
         all_models = await self.state_manager.get_all_models()
+        routing_order_config = await self.state_manager.get_routing_order_config()
+        
         candidate_models = []
-        for model_id, model_config in all_models.items():
-            if (model_config.routing.priority_group == priority_group and 
-                model_config.status == "active"):
-                candidate_models.append((model_id, model_config))
-
-        # Sort by order
-        candidate_models.sort(key=lambda x: x[1].routing.order)
+        # Determine which list to use based on priority_group
+        order_list = None
+        if priority_group == "strong_tier":
+            order_list = routing_order_config.strong_models
+        else:
+            order_list = routing_order_config.weak_models
+        
+        if order_list:
+            # Use the order list to sort models; exclude models not in list
+            for model_id in order_list:
+                if model_id in all_models:
+                    model_config = all_models[model_id]
+                    # Check priority_group matches? Maybe not required if list is specific.
+                    # But we can still enforce priority_group consistency.
+                    if model_config.routing.priority_group == priority_group:
+                        candidate_models.append((model_id, model_config))
+        else:
+            # Fallback to old logic
+            for model_id, model_config in all_models.items():
+                if (model_config.routing.priority_group == priority_group and
+                    model_config.status == "active"):
+                    candidate_models.append((model_id, model_config))
+            # Sort by order
+            candidate_models.sort(key=lambda x: x[1].routing.order)
+        
         if not candidate_models:
             raise LLMClientError(f"No active models in priority group {priority_group}")
 
@@ -178,6 +198,9 @@ class Router:
             "gemini-2.5-flash-lite": get_gemini_backup2_client,
             "gemini-flash-latest": get_gemini_flash_latest_client,
         }
+
+        # Set tier variable before entering the loop to avoid UnboundLocalError in exception handler
+        tier = "weak" if priority_group == "fast_tier" else "strong"
 
         for model_id, model_config in candidate_models:
             # Check throttle ban
@@ -216,8 +239,7 @@ class Router:
                 response = await client.chat_completion(messages)
                 latency_ms = (time.time() - start_time) * 1000
 
-                # Record metrics
-                tier = "weak" if priority_group == "fast_tier" else "strong"
+                # Record metrics (tier is already set before the loop)
                 metrics.record_model_latency(model_id, tier, latency_ms, "success")
 
                 # Calculate cost and update state
@@ -295,7 +317,13 @@ class Router:
             raise LLMClientError("No model could be selected for the request.")
 
         # 6. Update cycle detection with the response
-        cycle_detector.add_request_response(prompt, response.content)
+        # IMPORTANT: Only update cycle detection after successful completion
+        # to avoid false positives when requests fail and are retried
+        if response and hasattr(response, 'content') and response.content:
+            cycle_detector.add_request_response(prompt, response.content)
+            logger.debug(f"Updated cycle detector with successful response for session {session_id}")
+        else:
+            logger.warning(f"Skipping cycle detector update - no valid response content for session {session_id}")
 
         # 7. Update budget with actual cost
         self.budget.add_cost(session_id, response.cost)

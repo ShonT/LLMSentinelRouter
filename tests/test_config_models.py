@@ -14,6 +14,10 @@ from sentinelrouter.schemas.config_models import (
     PricingTier,
     PricingInfo,
     ModelState,
+    TierLimits,
+    CostInfo,
+    JudgeConfig,
+    RoutingOrderConfig,
     ModelConfig,
     UnifiedConfig,
 )
@@ -138,32 +142,86 @@ def test_model_state():
         ModelState(requests_today=-1)
 
 
+def test_tier_limits_and_cost_info():
+    """Test TierLimits and CostInfo validation."""
+    # TierLimits
+    tier = TierLimits(
+        requests_per_day=1500,
+        requests_per_minute=15,
+        tokens_per_minute=1_000_000,
+        tokens_per_day=10_000_000,
+    )
+    assert tier.requests_per_day == 1500
+    assert tier.tokens_per_minute == 1_000_000
+    # Negative values not allowed
+    with pytest.raises(ValidationError):
+        TierLimits(requests_per_day=-1)
+    
+    # CostInfo
+    cost = CostInfo(per_call=0.01, per_token_input=0.000002, per_token_output=0.000004)
+    assert cost.per_call == 0.01
+    assert cost.per_token_input == 0.000002
+    assert cost.per_token_output == 0.000004
+    # Negative cost not allowed
+    with pytest.raises(ValidationError):
+        CostInfo(per_call=-0.01)
+
+
+def test_judge_config_and_routing_order_config():
+    """Test JudgeConfig and RoutingOrderConfig validation."""
+    # JudgeConfig
+    judge = JudgeConfig(model_order=["model1", "model2"], is_judge_required=True)
+    assert judge.model_order == ["model1", "model2"]
+    assert judge.is_judge_required is True
+    
+    # RoutingOrderConfig
+    routing = RoutingOrderConfig(
+        strong_models=["claude-3-opus", "gpt-4"],
+        weak_models=["deepseek-chat", "gemini-flash"],
+    )
+    assert routing.strong_models == ["claude-3-opus", "gpt-4"]
+    assert routing.weak_models == ["deepseek-chat", "gemini-flash"]
+
+
 def test_model_config():
     """Test ModelConfig validation."""
     config = ModelConfig(
         display_name="Test Model",
         provider="anthropic",
+        model_definition="A test model",
+        model_key="anthropic-claude-3",
         status="active",
+        status_valid_till=None,
         capabilities=ModelCapabilities(modality=["text"], context_window=128000),
         routing=RoutingConfig(priority_group="fast_tier", order=1),
         limits=RateLimits(requests_per_minute=10, requests_per_day=1000, tokens_per_minute=500000),
+        free_tier_limits=TierLimits(requests_per_day=100, requests_per_minute=5, tokens_per_minute=100000, tokens_per_day=500000),
+        paid_tier_limits=TierLimits(requests_per_day=5000, requests_per_minute=50, tokens_per_minute=2000000, tokens_per_day=10000000),
         pricing=PricingInfo(
             currency="USD",
             input_cost_per_m=0.0,
             output_cost_per_m=0.0,
             usage_tiers=[]
         ),
+        cost=CostInfo(per_call=0.01, per_token_input=0.000002, per_token_output=0.000004),
         state=ModelState()
     )
     assert config.display_name == "Test Model"
+    assert config.model_definition == "A test model"
+    assert config.model_key == "anthropic-claude-3"
     assert config.status == "active"
+    assert config.status_valid_till is None
     assert config.routing.priority_group == "fast_tier"
+    assert config.free_tier_limits.requests_per_day == 100
+    assert config.paid_tier_limits.tokens_per_minute == 2000000
+    assert config.cost.per_call == 0.01
 
     # Invalid status
     with pytest.raises(ValidationError):
         ModelConfig(
             display_name="Test",
             provider="test",
+            model_key="test",
             status="invalid",
             capabilities=ModelCapabilities(modality=["text"], context_window=1000),
             routing=RoutingConfig(priority_group="fast_tier", order=1),
@@ -181,6 +239,7 @@ def test_unified_config():
             "model-1": ModelConfig(
                 display_name="Model One",
                 provider="deepseek",
+                model_key="deepseek-chat",
                 status="active",
                 capabilities=ModelCapabilities(modality=["text"], context_window=128000),
                 routing=RoutingConfig(priority_group="fast_tier", order=1),
@@ -202,6 +261,7 @@ def test_unified_config_serialization():
             "test": ModelConfig(
                 display_name="Test",
                 provider="test",
+                model_key="test-model",
                 status="active",
                 capabilities=ModelCapabilities(modality=["text"], context_window=1000),
                 routing=RoutingConfig(priority_group="fast_tier", order=1),
