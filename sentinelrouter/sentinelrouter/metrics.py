@@ -164,7 +164,7 @@ class MetricsCollector:
         }
         self._write_metric(metric)
 
-    def record_semantic_cache_event(self, event: str, semantic_hash: str, hit: bool, confidence: float):
+    def record_semantic_cache_event(self, event: str, semantic_hash: str, hit: bool, confidence: float, route_decision: str = None):
         """Record semantic cache lookup/record events."""
         metric = {
             "type": "semantic_cache",
@@ -174,6 +174,8 @@ class MetricsCollector:
             "hit": hit,
             "confidence": confidence,
         }
+        if route_decision:
+            metric["route_decision"] = route_decision
         self._write_metric(metric)
 
     def record_judge_timeout_escalation(self, session_id: str, model_id: str, timeout_ms: float):

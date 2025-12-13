@@ -109,7 +109,33 @@ class Router:
         cached_stats = self.semantic_cache.get_stats_for_prompt(prompt, messages)
         cache_hit = cached_stats is not None
         cache_confidence = self.semantic_cache.confidence_for_hash(semantic_hash) if cache_hit else 0.0
-        metrics.record_semantic_cache_event("lookup", semantic_hash, cache_hit, cache_confidence)
+        
+        # Check if we can use cached routing decision
+        cache_based_routing = None
+        cache_skip_judge = False
+        if cache_hit and cached_stats:
+            confident, confidence = self.semantic_cache.has_confident_history(prompt, messages)
+            if confident:
+                # Determine preferred model from cache history
+                if cached_stats.weak_calls > cached_stats.strong_calls:
+                    cache_based_routing = "weak"
+                    cache_skip_judge = True
+                    logger.info(
+                        f"Cache confident history (conf={confidence:.2f}): "
+                        f"{cached_stats.weak_calls} weak vs {cached_stats.strong_calls} strong calls - "
+                        f"routing to weak model, skipping judge"
+                    )
+                elif cached_stats.strong_calls > cached_stats.weak_calls:
+                    cache_based_routing = "strong"
+                    cache_skip_judge = True
+                    logger.info(
+                        f"Cache confident history (conf={confidence:.2f}): "
+                        f"{cached_stats.strong_calls} strong vs {cached_stats.weak_calls} weak calls - "
+                        f"routing to strong model, skipping judge"
+                    )
+        
+        # Record cache lookup with routing decision
+        metrics.record_semantic_cache_event("lookup", semantic_hash, cache_hit, cache_confidence, cache_based_routing)
 
         # 1. Budget check (Module A)
         # Estimate worst-case cost (strong model) to check budget.
@@ -127,15 +153,26 @@ class Router:
         if cycle_detected:
             logger.warning(f"Cycle detected for session {session_id}. Overriding to strong model.")
 
-        # 3. Judge (Module B) - Conditional based on use_judge parameter
+        # 3. Judge (Module B) - Conditional based on use_judge parameter and cache
         judge_latency_ms: Optional[float] = None
         judge_skipped = False
         
         # Determine if we should call judge immediately
-        # use_judge=True: always call judge
-        # use_judge=False: skip judge, assume weak model
-        # use_judge=None: conditional mode - skip judge initially, call if weak model takes >15s
-        if use_judge is False:
+        # Priority order:
+        # 1. Cache-based routing (if confident history exists)
+        # 2. use_judge=True: always call judge
+        # 3. use_judge=False: skip judge, assume weak model
+        # 4. use_judge=None: conditional mode - skip judge initially, call if weak model takes >15s
+        if cache_skip_judge and cache_based_routing:
+            # Cache has confident history - skip judge and use cache recommendation
+            if cache_based_routing == "weak":
+                complexity_score, impact_scope, reasoning = 0.0, "LOW", f"Judge skipped - cache confident (conf={cache_confidence:.2f}) recommends weak model"
+            else:
+                complexity_score, impact_scope, reasoning = 0.95, "HIGH", f"Judge skipped - cache confident (conf={cache_confidence:.2f}) recommends strong model"
+            judge_skipped = True
+            metrics.record_judge_skip(session_id, f"cache_confident_{cache_based_routing}")
+            logger.info(f"Judge skipped - using cache-based routing: {cache_based_routing}")
+        elif use_judge is False:
             # Skip judge entirely - assume weak model
             complexity_score, impact_scope, reasoning = 0.0, "LOW", "Judge skipped by request (use_judge=false)"
             judge_skipped = True

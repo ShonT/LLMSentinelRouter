@@ -183,6 +183,27 @@ class SemanticCache:
         confidence = self.confidence_for_hash(semantic_hash)
         return confidence >= self.confidence_threshold, confidence
 
+    def get_recommended_route(self, prompt: str, context: Optional[Any]) -> Optional[str]:
+        """
+        Get cache-based routing recommendation if confidence threshold is met.
+        
+        Returns:
+            "weak", "strong", or None if no confident recommendation
+        """
+        confident, _ = self.has_confident_history(prompt, context)
+        if not confident:
+            return None
+        
+        stats = self.get_stats_for_prompt(prompt, context)
+        if not stats:
+            return None
+        
+        if stats.weak_calls > stats.strong_calls:
+            return "weak"
+        elif stats.strong_calls > stats.weak_calls:
+            return "strong"
+        return None
+
     def summarize_stats(self, semantic_hash: str) -> Optional[Dict[str, Any]]:
         stats = self.db.get(SemanticCacheStats, semantic_hash)
         if stats is None:
