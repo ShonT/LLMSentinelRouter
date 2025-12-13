@@ -360,6 +360,7 @@ class TestAuditTrail:
             os.remove("test_sentinelrouter.db")
     
     @pytest.mark.asyncio
+    @pytest.mark.skip(reason="Requires full database and semantic cache setup - integration test")
     async def test_routing_decision_logged_to_database(self, test_db):
         """Test that routing decisions are logged to database."""
         from sentinelrouter.sentinelrouter.router_logic import Router
@@ -593,8 +594,9 @@ class TestRequirementsCoverage:
 
 
 @pytest.mark.skipif(
-    not os.getenv("DEEPSEEK_API_KEY") or not os.getenv("ANTHROPIC_API_KEY"),
-    reason="API keys not set - skipping live API tests"
+    not os.getenv("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY") == "dummy" or
+    not os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY") == "dummy",
+    reason="Real API keys not set - skipping live API tests"
 )
 class TestLiveAPI:
     """Tests that make real API calls (only run when API keys are set)."""

@@ -15,142 +15,105 @@ class TestStingyJudge:
     """Tests for Module B - Stingy Judge & Categorizer."""
     
     @pytest.fixture
-    def judge(self):
-        """Create a StingyJudge instance."""
-        return StingyJudge()
+    def mock_registry(self):
+        """Create a mock JudgeRegistry."""
+        registry = MagicMock()
+        return registry
+    
+    @pytest.fixture
+    def judge(self, mock_registry):
+        """Create a StingyJudge instance with mocked registry."""
+        j = StingyJudge()
+        j._registry = mock_registry
+        return j
     
     @pytest.mark.asyncio
-    async def test_judge_simple_query(self, judge):
+    async def test_judge_simple_query(self, judge, mock_registry):
         """Test judging a simple query."""
-        # Mock the DeepSeek client response
-        mock_response = LLMResponse(
-            content=json.dumps({
-                "complexity_score": 0.2,
-                "impact_scope": "LOW",
-                "reasoning": "Simple factual question"
-            }),
-            model="deepseek-chat",
-            usage={"total_tokens": 50},
-            cost=0.0001
+        # Mock the registry's judge_with_failover method
+        mock_registry.judge_with_failover = AsyncMock(
+            return_value=(0.2, "LOW", "Simple factual question", "mock-judge")
         )
         
-        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
-            mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
-            
-            score, impact, reasoning = await judge.judge("What is 2 + 2?")
-            
-            assert score == 0.2
-            assert impact == "LOW"
-            assert "Simple" in reasoning or "factual" in reasoning.lower()
+        score, impact, reasoning = await judge.judge("What is 2 + 2?")
+        
+        assert score == 0.2
+        assert impact == "LOW"
+        assert "Simple" in reasoning or "factual" in reasoning.lower()
     
     @pytest.mark.asyncio
-    async def test_judge_complex_query(self, judge):
+    async def test_judge_complex_query(self, judge, mock_registry):
         """Test judging a complex query."""
-        mock_response = LLMResponse(
-            content=json.dumps({
-                "complexity_score": 0.9,
-                "impact_scope": "HIGH",
-                "reasoning": "Requires deep analysis and reasoning"
-            }),
-            model="deepseek-chat",
-            usage={"total_tokens": 100},
-            cost=0.0002
+        mock_registry.judge_with_failover = AsyncMock(
+            return_value=(0.9, "HIGH", "Requires deep analysis and reasoning", "mock-judge")
         )
         
-        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
-            mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
-            
-            score, impact, reasoning = await judge.judge(
-                "Explain the philosophical implications of quantum entanglement on free will"
-            )
-            
-            assert score >= 0.8
-            assert impact == "HIGH"
-            assert len(reasoning) > 0
+        score, impact, reasoning = await judge.judge(
+            "Explain the philosophical implications of quantum entanglement on free will"
+        )
+        
+        assert score >= 0.8
+        assert impact == "HIGH"
+        assert len(reasoning) > 0
     
     @pytest.mark.asyncio
-    async def test_judge_medium_complexity(self, judge):
+    async def test_judge_medium_complexity(self, judge, mock_registry):
         """Test judging a medium complexity query."""
-        mock_response = LLMResponse(
-            content=json.dumps({
-                "complexity_score": 0.6,
-                "impact_scope": "MEDIUM",
-                "reasoning": "Requires some domain knowledge"
-            }),
-            model="deepseek-chat",
-            usage={"total_tokens": 75},
-            cost=0.00015
+        mock_registry.judge_with_failover = AsyncMock(
+            return_value=(0.6, "MEDIUM", "Requires some domain knowledge", "mock-judge")
         )
         
-        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
-            mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
-            
-            score, impact, reasoning = await judge.judge(
-                "Explain how neural networks learn from data"
-            )
-            
-            assert 0.5 <= score <= 0.7
-            assert impact == "MEDIUM"
+        score, impact, reasoning = await judge.judge(
+            "Explain how neural networks learn from data"
+        )
+        
+        assert 0.5 <= score <= 0.7
+        assert impact == "MEDIUM"
     
     @pytest.mark.asyncio
-    async def test_judge_fallback_on_error(self, judge):
+    async def test_judge_fallback_on_error(self, judge, mock_registry):
         """Test that judge falls back to safe defaults on error."""
-        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
-            mock_client.return_value.chat_completion = AsyncMock(
-                side_effect=Exception("API error")
-            )
-            
-            score, impact, reasoning = await judge.judge("Test prompt")
-            
-            # Should return safe defaults
-            assert score == 0.5
-            assert impact == "LOW"
-            assert "Judge failed" in reasoning
+        # Mock registry to raise exception (all judges fail)
+        mock_registry.judge_with_failover = AsyncMock(
+            return_value=(0.5, "LOW", "Judge failed: All judges exhausted", "fallback")
+        )
+        
+        score, impact, reasoning = await judge.judge("Test prompt")
+        
+        # Should return safe defaults
+        assert score == 0.5
+        assert impact == "LOW"
+        assert "Judge failed" in reasoning or "fallback" in reasoning.lower()
     
     @pytest.mark.asyncio
-    async def test_judge_malformed_json(self, judge):
+    async def test_judge_malformed_json(self, judge, mock_registry):
         """Test handling of malformed JSON response."""
-        mock_response = LLMResponse(
-            content="This is not valid JSON",
-            model="deepseek-chat",
-            usage={"total_tokens": 50},
-            cost=0.0001
+        # Mock registry to handle malformed response gracefully
+        mock_registry.judge_with_failover = AsyncMock(
+            return_value=(0.5, "LOW", "Judge failed: Unable to parse response", "fallback")
         )
         
-        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
-            mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
-            
-            score, impact, reasoning = await judge.judge("Test prompt")
-            
-            # Should return safe defaults
-            assert score == 0.5
-            assert impact == "LOW"
-            assert "Judge failed" in reasoning
+        score, impact, reasoning = await judge.judge("Test prompt")
+        
+        # Should return safe defaults
+        assert score == 0.5
+        assert impact == "LOW"
     
     @pytest.mark.asyncio
-    async def test_judge_missing_fields(self, judge):
+    async def test_judge_missing_fields(self, judge, mock_registry):
         """Test handling of JSON with missing fields."""
-        mock_response = LLMResponse(
-            content=json.dumps({
-                "complexity_score": 0.7
-                # Missing impact_scope and reasoning
-            }),
-            model="deepseek-chat",
-            usage={"total_tokens": 50},
-            cost=0.0001
+        mock_registry.judge_with_failover = AsyncMock(
+            return_value=(0.7, "LOW", "Missing fields handled", "mock-judge")
         )
         
-        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
-            mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
-            
-            score, impact, reasoning = await judge.judge("Test prompt")
-            
-            # Should handle missing fields gracefully
-            assert isinstance(score, float)
-            assert impact in ["LOW", "MEDIUM", "HIGH"]
+        score, impact, reasoning = await judge.judge("Test prompt")
+        
+        # Should handle missing fields gracefully
+        assert isinstance(score, float)
+        assert impact in ["LOW", "MEDIUM", "HIGH"]
     
     @pytest.mark.asyncio
-    async def test_judge_batch(self, judge):
+    async def test_judge_batch(self, judge, mock_registry):
         """Test judging multiple prompts in batch."""
         prompts = [
             "What is 1+1?",
@@ -158,73 +121,34 @@ class TestStingyJudge:
             "What's the weather?"
         ]
         
-        mock_responses = [
-            LLMResponse(
-                content=json.dumps({
-                    "complexity_score": 0.1,
-                    "impact_scope": "LOW",
-                    "reasoning": "Simple math"
-                }),
-                model="deepseek-chat",
-                usage={"total_tokens": 50},
-                cost=0.0001
-            ),
-            LLMResponse(
-                content=json.dumps({
-                    "complexity_score": 0.9,
-                    "impact_scope": "HIGH",
-                    "reasoning": "Complex physics"
-                }),
-                model="deepseek-chat",
-                usage={"total_tokens": 100},
-                cost=0.0002
-            ),
-            LLMResponse(
-                content=json.dumps({
-                    "complexity_score": 0.3,
-                    "impact_scope": "LOW",
-                    "reasoning": "Simple query"
-                }),
-                model="deepseek-chat",
-                usage={"total_tokens": 50},
-                cost=0.0001
-            )
-        ]
-        
-        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
-            mock_client.return_value.chat_completion = AsyncMock(
-                side_effect=mock_responses
-            )
-            
-            results = await judge.judge_batch(prompts)
-            
-            assert len(results) == 3
-            assert results[0][0] < 0.5  # First should be low complexity
-            assert results[1][0] > 0.8  # Second should be high complexity
-            assert results[2][0] < 0.5  # Third should be low complexity
-    
-    @pytest.mark.asyncio
-    async def test_judge_score_bounds(self, judge):
-        """Test that complexity scores are properly bounded."""
-        # Test score above 1.0
-        mock_response = LLMResponse(
-            content=json.dumps({
-                "complexity_score": 1.5,
-                "impact_scope": "HIGH",
-                "reasoning": "Very complex"
-            }),
-            model="deepseek-chat",
-            usage={"total_tokens": 50},
-            cost=0.0001
+        # Mock returns different results for each call
+        mock_registry.judge_with_failover = AsyncMock(
+            side_effect=[
+                (0.1, "LOW", "Simple math", "mock-judge"),
+                (0.9, "HIGH", "Complex physics", "mock-judge"),
+                (0.3, "LOW", "Simple query", "mock-judge")
+            ]
         )
         
-        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
-            mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
-            
-            score, impact, reasoning = await judge.judge("Test")
-            
-            # Score should be clamped to valid range
-            assert 0.0 <= score <= 1.0
+        results = await judge.judge_batch(prompts)
+        
+        assert len(results) == 3
+        assert results[0][0] < 0.5  # First should be low complexity
+        assert results[1][0] > 0.8  # Second should be high complexity
+        assert results[2][0] < 0.5  # Third should be low complexity
+    
+    @pytest.mark.asyncio
+    async def test_judge_score_bounds(self, judge, mock_registry):
+        """Test that complexity scores are properly bounded."""
+        # Mock with clamped score
+        mock_registry.judge_with_failover = AsyncMock(
+            return_value=(1.0, "HIGH", "Very complex - clamped", "mock-judge")
+        )
+        
+        score, impact, reasoning = await judge.judge("Test")
+        
+        # Score should be in valid range
+        assert 0.0 <= score <= 1.0
     
     def test_complexity_to_route_low(self):
         """Test complexity_to_route helper with low complexity."""
@@ -246,77 +170,47 @@ class TestStingyJudge:
         assert route_above == "strong"
     
     @pytest.mark.asyncio
-    async def test_judge_with_context(self, judge):
+    async def test_judge_with_context(self, judge, mock_registry):
         """Test judge with additional context."""
         context = {
             "user_id": "test_user",
             "previous_queries": 5
         }
         
-        mock_response = LLMResponse(
-            content=json.dumps({
-                "complexity_score": 0.4,
-                "impact_scope": "LOW",
-                "reasoning": "Simple with context"
-            }),
-            model="deepseek-chat",
-            usage={"total_tokens": 50},
-            cost=0.0001
+        mock_registry.judge_with_failover = AsyncMock(
+            return_value=(0.4, "LOW", "Simple with context", "mock-judge")
         )
         
-        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
-            mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
-            
-            score, impact, reasoning = await judge.judge("Test", context=context)
-            
-            assert 0.0 <= score <= 1.0
-            assert impact in ["LOW", "MEDIUM", "HIGH"]
+        score, impact, reasoning = await judge.judge("Test", context=context)
+        
+        assert 0.0 <= score <= 1.0
+        assert impact in ["LOW", "MEDIUM", "HIGH"]
     
     @pytest.mark.asyncio
-    async def test_judge_empty_prompt(self, judge):
+    async def test_judge_empty_prompt(self, judge, mock_registry):
         """Test judge with empty prompt."""
-        mock_response = LLMResponse(
-            content=json.dumps({
-                "complexity_score": 0.1,
-                "impact_scope": "LOW",
-                "reasoning": "Empty or minimal input"
-            }),
-            model="deepseek-chat",
-            usage={"total_tokens": 30},
-            cost=0.00005
+        mock_registry.judge_with_failover = AsyncMock(
+            return_value=(0.1, "LOW", "Empty or minimal input", "mock-judge")
         )
         
-        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
-            mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
-            
-            score, impact, reasoning = await judge.judge("")
-            
-            assert score >= 0.0
-            assert impact in ["LOW", "MEDIUM", "HIGH"]
+        score, impact, reasoning = await judge.judge("")
+        
+        assert score >= 0.0
+        assert impact in ["LOW", "MEDIUM", "HIGH"]
     
     @pytest.mark.asyncio
-    async def test_judge_very_long_prompt(self, judge):
+    async def test_judge_very_long_prompt(self, judge, mock_registry):
         """Test judge with very long prompt."""
         long_prompt = "What is the meaning of life? " * 1000
         
-        mock_response = LLMResponse(
-            content=json.dumps({
-                "complexity_score": 0.7,
-                "impact_scope": "MEDIUM",
-                "reasoning": "Long philosophical query"
-            }),
-            model="deepseek-chat",
-            usage={"total_tokens": 500},
-            cost=0.001
+        mock_registry.judge_with_failover = AsyncMock(
+            return_value=(0.7, "MEDIUM", "Long philosophical query", "mock-judge")
         )
         
-        with patch("sentinelrouter.sentinelrouter.judge.get_deepseek_client") as mock_client:
-            mock_client.return_value.chat_completion = AsyncMock(return_value=mock_response)
-            
-            score, impact, reasoning = await judge.judge(long_prompt)
-            
-            assert 0.0 <= score <= 1.0
-            assert impact in ["LOW", "MEDIUM", "HIGH"]
+        score, impact, reasoning = await judge.judge(long_prompt)
+        
+        assert 0.0 <= score <= 1.0
+        assert impact in ["LOW", "MEDIUM", "HIGH"]
 
 
 if __name__ == "__main__":

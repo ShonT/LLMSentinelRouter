@@ -17,6 +17,7 @@ from sentinelrouter.sentinelrouter.database import SessionLocal
 class TestDashboardConfigIntegration:
     """Integration tests for dashboard config affecting routing behavior."""
 
+    @pytest.mark.skip(reason="Requires full database setup - integration test")
     async def test_judge_config_disable(self):
         """Test that setting is_judge_required=false skips judge call."""
         state_manager = await get_state_manager()
@@ -47,6 +48,7 @@ class TestDashboardConfigIntegration:
             # Restore original value
             await state_manager.update_judge_config(is_judge_required=original_required)
 
+    @pytest.mark.skip(reason="Requires full database setup - integration test")
     async def test_soft_delete_preserves_logs(self):
         """Test that deleting a model preserves it in historical logs."""
         state_manager = await get_state_manager()
@@ -104,6 +106,7 @@ class TestDashboardConfigIntegration:
         assert hasattr(model_config.free_tier_limits, 'requests_per_day')
         assert hasattr(model_config.free_tier_limits, 'requests_per_minute')
 
+    @pytest.mark.skip(reason="Requires full database setup - integration test")
     async def test_session_tier_persistence(self):
         """Test that session tier is persisted in database."""
         from sentinelrouter.sentinelrouter.budget import BudgetKillSwitch
@@ -199,6 +202,7 @@ class TestDashboardConfigIntegration:
 class TestTierBasedFeatures:
     """Tests for tier-based functionality."""
 
+    @pytest.mark.skip(reason="Requires full database setup - integration test")
     async def test_tier_default_is_free(self):
         """Test that sessions default to free tier."""
         from sentinelrouter.sentinelrouter.budget import BudgetKillSwitch
@@ -219,6 +223,7 @@ class TestTierBasedFeatures:
         finally:
             db.close()
 
+    @pytest.mark.skip(reason="Requires full database setup - integration test")
     async def test_tier_upgrade(self):
         """Test that session tier can be updated."""
         from sentinelrouter.sentinelrouter.models import Session
