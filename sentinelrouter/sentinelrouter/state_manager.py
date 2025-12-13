@@ -267,7 +267,7 @@ class StateManager:
                 logger.warning(f"Model {model_id} does not exist")
                 return False
             model_dict = model.model_dump()
-            model_dict["status"] = "banned"
+            model_dict["status"] = "BANNED"
             model_dict["status_valid_till"] = until
             updated_model = ModelConfig(**model_dict)
             self.config.models[model_id] = updated_model
@@ -283,7 +283,7 @@ class StateManager:
                 logger.warning(f"Model {model_id} does not exist")
                 return False
             model_dict = model.model_dump()
-            model_dict["status"] = "active"
+            model_dict["status"] = "ACTIVE"
             model_dict["status_valid_till"] = None
             updated_model = ModelConfig(**model_dict)
             self.config.models[model_id] = updated_model
@@ -296,7 +296,7 @@ class StateManager:
         model = self.config.models.get(model_id)
         if not model:
             return False
-        if model.status != "banned":
+        if model.status != "BANNED":
             return False
         if model.status_valid_till is None:
             return True

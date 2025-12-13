@@ -197,7 +197,7 @@ class Router:
             # Fallback to old logic
             for model_id, model_config in all_models.items():
                 if (model_config.routing.priority_group == priority_group and
-                    model_config.status == "active"):
+                    model_config.status == "ACTIVE"):
                     candidate_models.append((model_id, model_config))
             # Sort by order
             candidate_models.sort(key=lambda x: x[1].routing.order)

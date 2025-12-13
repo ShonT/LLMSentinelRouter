@@ -44,7 +44,7 @@ def temp_config_file():
                     provider="test",
                     model_key="test-model-1",
                     model_definition="A test model",
-                    status="active",
+                    status="ACTIVE",
                     status_valid_till=None,
                     capabilities=ModelCapabilities(modality=["text"], context_window=128000),
                     routing=RoutingConfig(priority_group="fast_tier", order=1),
@@ -67,7 +67,7 @@ def temp_config_file():
                     provider="test",
                     model_key="test-model-2",
                     model_definition="Another test model",
-                    status="inactive",
+                    status="BANNED",
                     status_valid_till=None,
                     capabilities=ModelCapabilities(modality=["text"], context_window=128000),
                     routing=RoutingConfig(priority_group="strong_tier", order=1),
@@ -133,7 +133,7 @@ async def test_state_manager_initialization(state_manager):
 
     model1 = await state_manager.get_model_config("test-model-1")
     assert model1.display_name == "Test Model 1"
-    assert model1.status == "active"
+    assert model1.status == "ACTIVE"
     assert model1.routing.priority_group == "fast_tier"
     state1 = await state_manager.get_model_state("test-model-1")
     assert state1.requests_today == 0
@@ -249,7 +249,7 @@ async def test_add_model(state_manager):
         provider="new",
         model_key="new-model",
         model_definition="A brand new model",
-        status="active",
+        status="ACTIVE",
         capabilities=ModelCapabilities(modality=["text"], context_window=128000),
         routing=RoutingConfig(priority_group="fast_tier", order=2),
         limits=RateLimits(requests_per_minute=20, requests_per_day=2000, tokens_per_minute=1000000),
@@ -296,7 +296,7 @@ async def test_update_model_config(state_manager):
     """Update model configuration (excluding state)."""
     updates = {
         "display_name": "Updated Name",
-        "status": "disabled",
+        "status": "BANNED",
         "free_tier_limits": TierLimits(requests_per_day=200),
     }
     success = await state_manager.update_model_config("test-model-1", **updates)
@@ -304,7 +304,7 @@ async def test_update_model_config(state_manager):
 
     model = await state_manager.get_model_config("test-model-1")
     assert model.display_name == "Updated Name"
-    assert model.status == "disabled"
+    assert model.status == "BANNED"
     assert model.free_tier_limits.requests_per_day == 200
 
 
@@ -317,7 +317,7 @@ async def test_ban_unban_model(state_manager):
     assert success is True
 
     model = await state_manager.get_model_config("test-model-1")
-    assert model.status == "banned"
+    assert model.status == "BANNED"
     assert model.status_valid_till == expiry
 
     # Check is_model_banned
@@ -328,7 +328,7 @@ async def test_ban_unban_model(state_manager):
     success = await state_manager.unban_model("test-model-1")
     assert success is True
     model = await state_manager.get_model_config("test-model-1")
-    assert model.status == "active"
+    assert model.status == "ACTIVE"
     assert model.status_valid_till is None
     banned = await state_manager.is_model_banned("test-model-1")
     assert banned is False

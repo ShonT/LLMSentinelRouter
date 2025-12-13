@@ -348,7 +348,7 @@ class MigrationManager:
         print("\n🧠 Models migrated:")
         for model_id, model_cfg in unified_config.models.items():
             status = model_cfg.status
-            key_present = "✅" if status == "active" else "❌"
+            key_present = "✅" if status == "ACTIVE" else "❌"
             print(f"  {key_present} {model_id:30} [{status:>8}] "
                   f"priority={model_cfg.routing.priority_group:12} order={model_cfg.routing.order}")
 

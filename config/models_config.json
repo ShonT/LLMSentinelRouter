@@ -10,7 +10,7 @@
       "provider": "test",
       "model_definition": "A test model",
       "model_key": "test-model-1",
-      "status": "active",
+      "status": "ACTIVE",
       "status_valid_till": null,
       "capabilities": {
         "modality": [
@@ -64,7 +64,7 @@
       "provider": "test",
       "model_definition": "Another test model",
       "model_key": "test-model-2",
-      "status": "inactive",
+      "status": "BANNED",
       "status_valid_till": null,
       "capabilities": {
         "modality": [

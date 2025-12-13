@@ -109,8 +109,8 @@ class ModelConfig(BaseModel):
     provider: str
     model_definition: Optional[str] = None  # Description of the model
     model_key: str  # Unique identifier for the model (e.g., "gpt-4", "claude-3-5-sonnet")
-    status: Literal["active", "inactive", "disabled", "banned"] = "active"
-    status_valid_till: Optional[datetime] = None  # If banned, until when
+    status: Literal["ACTIVE", "BANNED"] = "ACTIVE"
+    status_valid_till: Optional[datetime] = None  # If BANNED, until when
     
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)

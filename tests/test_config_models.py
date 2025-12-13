@@ -190,7 +190,7 @@ def test_model_config():
         provider="anthropic",
         model_definition="A test model",
         model_key="anthropic-claude-3",
-        status="active",
+        status="ACTIVE",
         status_valid_till=None,
         capabilities=ModelCapabilities(modality=["text"], context_window=128000),
         routing=RoutingConfig(priority_group="fast_tier", order=1),
@@ -209,7 +209,7 @@ def test_model_config():
     assert config.display_name == "Test Model"
     assert config.model_definition == "A test model"
     assert config.model_key == "anthropic-claude-3"
-    assert config.status == "active"
+    assert config.status == "ACTIVE"
     assert config.status_valid_till is None
     assert config.routing.priority_group == "fast_tier"
     assert config.free_tier_limits.requests_per_day == 100
@@ -240,7 +240,7 @@ def test_unified_config():
                 display_name="Model One",
                 provider="deepseek",
                 model_key="deepseek-chat",
-                status="active",
+                status="ACTIVE",
                 capabilities=ModelCapabilities(modality=["text"], context_window=128000),
                 routing=RoutingConfig(priority_group="fast_tier", order=1),
                 limits=RateLimits(requests_per_minute=10, requests_per_day=1000, tokens_per_minute=500000),
@@ -262,7 +262,7 @@ def test_unified_config_serialization():
                 display_name="Test",
                 provider="test",
                 model_key="test-model",
-                status="active",
+                status="ACTIVE",
                 capabilities=ModelCapabilities(modality=["text"], context_window=1000),
                 routing=RoutingConfig(priority_group="fast_tier", order=1),
                 limits=RateLimits(requests_per_minute=10, requests_per_day=1000, tokens_per_minute=500000),
