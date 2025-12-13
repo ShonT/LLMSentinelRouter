@@ -160,6 +160,7 @@ All configuration is done via environment variables. The most important ones are
 | `MAX_COST_PER_SESSION` | Maximum allowed cost per session (USD) | 10.0 |
 | `INITIAL_THRESHOLD` | Initial complexity threshold for strong‑model escalation | 0.7 |
 | `ESCALATION_RATE_LIMIT` | Target escalation rate (5% rule) | 0.05 |
+| `CORS_ORIGINS` | Allowed CORS origins (comma-separated or "*" for all) | * |
 | `DATABASE_URL` | SQLAlchemy database URL | `sqlite:///./data/sentinelrouter.db` |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | INFO |
 

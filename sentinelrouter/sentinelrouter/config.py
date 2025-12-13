@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     port: int = Field(8000, env="PORT")
     log_level: str = Field("INFO", env="LOG_LEVEL")
     log_file: str = Field("./logs/sentinelrouter.log", env="LOG_FILE")
+    cors_origins: str = Field("*", env="CORS_ORIGINS")  # Comma-separated list, or "*" for all
 
     # Logging & Audit
     log_dir: str = Field("logs", env="LOG_DIR")
