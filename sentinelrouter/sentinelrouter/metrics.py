@@ -176,6 +176,27 @@ class MetricsCollector:
         }
         self._write_metric(metric)
 
+    def record_judge_timeout_escalation(self, session_id: str, model_id: str, timeout_ms: float):
+        """Record when a weak model times out and judge is called for escalation."""
+        metric = {
+            "type": "judge_timeout_escalation",
+            "timestamp": time.time(),
+            "session_id": session_id,
+            "model_id": model_id,
+            "timeout_ms": timeout_ms,
+        }
+        self._write_metric(metric)
+    
+    def record_judge_skip(self, session_id: str, reason: str):
+        """Record when judge is skipped (use_judge=false or conditional mode)."""
+        metric = {
+            "type": "judge_skip",
+            "timestamp": time.time(),
+            "session_id": session_id,
+            "reason": reason,
+        }
+        self._write_metric(metric)
+
     def record_strong_model_usage(
         self, 
         model_id: str, 

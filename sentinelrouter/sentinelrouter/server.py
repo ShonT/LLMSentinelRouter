@@ -104,6 +104,7 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
     session_id: Optional[str] = Field(None, description="Custom session ID for tracking")
     tier: Optional[str] = Field("free", description="User tier: 'free', 'paid', or 'premium'")
+    use_judge: Optional[bool] = Field(None, description="Force judge call (true) or skip judge (false). If None, uses conditional mode with 15s timeout.")
 
 class Usage(BaseModel):
     prompt_tokens: int
@@ -287,6 +288,7 @@ async def chat_completions(request: ChatCompletionRequest, fastapi_request: Requ
             request_id=str(uuid.uuid4()),
             client_ip=fastapi_request.client.host,
             tier=request.tier,
+            use_judge=request.use_judge,
         )
     except ValueError as e:
         # Budget exceeded or other business logic error

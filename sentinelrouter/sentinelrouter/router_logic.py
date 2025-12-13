@@ -85,6 +85,7 @@ class Router:
         messages: list,
         request_id: Optional[str] = None,
         client_ip: Optional[str] = None,
+        use_judge: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Process a single request through the full routing pipeline.
@@ -126,19 +127,39 @@ class Router:
         if cycle_detected:
             logger.warning(f"Cycle detected for session {session_id}. Overriding to strong model.")
 
-        # 3. Judge (Module B)
+        # 3. Judge (Module B) - Conditional based on use_judge parameter
         judge_latency_ms: Optional[float] = None
-        try:
-            judge_start = time.time()
-            complexity_score, impact_scope, reasoning = await self.judge.judge(prompt)
-            judge_latency_ms = (time.time() - judge_start) * 1000
-        except Exception as e:
-            logger.error(f"Judge failed: {e}. Falling back to default categorization.")
-            complexity_score, impact_scope, reasoning = 0.5, "LOW", "Judge failed, using default."
+        judge_skipped = False
+        
+        # Determine if we should call judge immediately
+        # use_judge=True: always call judge
+        # use_judge=False: skip judge, assume weak model
+        # use_judge=None: conditional mode - skip judge initially, call if weak model takes >15s
+        if use_judge is False:
+            # Skip judge entirely - assume weak model
+            complexity_score, impact_scope, reasoning = 0.0, "LOW", "Judge skipped by request (use_judge=false)"
+            judge_skipped = True
+            metrics.record_judge_skip(session_id, "explicit_skip_use_judge_false")
+            logger.info(f"Judge skipped by request - assuming weak model")
+        elif use_judge is True:
+            # Always call judge
+            try:
+                judge_start = time.time()
+                complexity_score, impact_scope, reasoning = await self.judge.judge(prompt)
+                judge_latency_ms = (time.time() - judge_start) * 1000
+            except Exception as e:
+                logger.error(f"Judge failed: {e}. Falling back to default categorization.")
+                complexity_score, impact_scope, reasoning = 0.5, "LOW", "Judge failed, using default."
 
-        logger.info(
-            f"Judge: complexity={complexity_score:.3f}, impact={impact_scope}, reasoning={reasoning[:50]}..."
-        )
+            logger.info(
+                f"Judge: complexity={complexity_score:.3f}, impact={impact_scope}, reasoning={reasoning[:50]}..."
+            )
+        else:
+            # Conditional mode (use_judge=None) - skip judge initially, will call if weak model is slow
+            complexity_score, impact_scope, reasoning = 0.0, "LOW", "Judge deferred - conditional mode (will call if weak model >15s)"
+            judge_skipped = True
+            metrics.record_judge_skip(session_id, "conditional_mode_deferred")
+            logger.info(f"Judge deferred (conditional mode) - will call if weak model takes >15s")
 
         # 4. Dynamic thresholding (Module C)
         threshold = self.threshold.get_threshold()
@@ -275,10 +296,65 @@ class Router:
                 model_used = model_id
                 logger.debug(f"Trying model: {model_id}")
 
-                # Track latency
+                # Track latency with timeout check for conditional judge mode
                 start_time = time.time()
-                response = await client.chat_completion(messages)
-                latency_ms = (time.time() - start_time) * 1000
+                
+                # In conditional mode, if this is a weak model attempt and judge was skipped,
+                # check if it takes >15s and escalate to judge + strong model if needed
+                if use_judge is None and judge_skipped and priority_group == "fast_tier":
+                    # Conditional mode: start weak model call with timeout monitoring
+                    try:
+                        # Use asyncio.wait_for with 15s timeout
+                        response = await asyncio.wait_for(
+                            client.chat_completion(messages),
+                            timeout=15.0
+                        )
+                        latency_ms = (time.time() - start_time) * 1000
+                        logger.info(f"Weak model completed in {latency_ms:.0f}ms (under 15s threshold)")
+                    except asyncio.TimeoutError:
+                        # Weak model is taking too long - call judge and potentially escalate
+                        logger.warning(f"Weak model exceeded 15s timeout - calling judge for escalation check")
+                        metrics.record_judge_timeout_escalation(session_id, model_id, 15000)
+                        
+                        # Call judge now
+                        try:
+                            judge_start = time.time()
+                            complexity_score, impact_scope, reasoning = await self.judge.judge(prompt)
+                            judge_latency_ms = (time.time() - judge_start) * 1000
+                            judge_skipped = False
+                            logger.info(
+                                f"Post-timeout judge: complexity={complexity_score:.3f}, impact={impact_scope}"
+                            )
+                        except Exception as e:
+                            logger.error(f"Post-timeout judge failed: {e}. Using default.")
+                            complexity_score, impact_scope, reasoning = 0.5, "MEDIUM", "Post-timeout judge failed"
+                        
+                        # Re-evaluate routing decision
+                        threshold = self.threshold.get_threshold()
+                        strict_mode = self.threshold.is_strict_mode()
+                        new_route_decision = self._decide_route(
+                            complexity_score,
+                            impact_scope,
+                            threshold,
+                            strict_mode,
+                            cycle_detected,
+                        )
+                        
+                        if new_route_decision == "strong":
+                            # Cancel weak model (already timed out) and escalate to strong model
+                            logger.info(f"Escalating to strong model due to timeout + judge recommendation")
+                            # Break from weak model loop and restart with strong models
+                            # We'll do this by raising a special exception and catching it
+                            raise TimeoutError("Weak model timeout - escalating to strong model")
+                        else:
+                            # Judge says weak is fine - wait for weak model to complete (no timeout this time)
+                            logger.info(f"Judge says weak model is sufficient - waiting for completion")
+                            response = await client.chat_completion(messages)
+                            latency_ms = (time.time() - start_time) * 1000
+                else:
+                    # Normal mode: no timeout monitoring
+                    response = await client.chat_completion(messages)
+                    latency_ms = (time.time() - start_time) * 1000
 
                 # Record metrics (tier is already set before the loop)
                 metrics.record_model_latency(model_id, tier, latency_ms, "success")
@@ -334,6 +410,45 @@ class Router:
 
                 break  # Success - exit loop
 
+            except TimeoutError as e:
+                # Special handling for timeout-based escalation
+                if "Weak model timeout - escalating to strong model" in str(e):
+                    logger.info(f"Weak model timeout detected - breaking to escalate to strong tier")
+                    # Break from weak model loop and switch to strong models
+                    priority_group = "strong_tier"
+                    route_decision = "strong"
+                    decision_reason = "Weak model exceeded 15s timeout and judge recommended strong model"
+                    
+                    # Recalculate candidate models for strong tier
+                    all_models = await self.state_manager.get_all_models()
+                    routing_order_config = await self.state_manager.get_routing_order_config()
+                    
+                    candidate_models = []
+                    order_list = routing_order_config.strong_models
+                    
+                    if order_list:
+                        for model_id_strong in order_list:
+                            if model_id_strong in all_models:
+                                model_config_strong = all_models[model_id_strong]
+                                if model_config_strong.routing.priority_group == "strong_tier":
+                                    candidate_models.append((model_id_strong, model_config_strong))
+                    else:
+                        # Fallback to old logic
+                        for model_id_strong, model_config_strong in all_models.items():
+                            if (model_config_strong.routing.priority_group == "strong_tier" and
+                                model_config_strong.status == "ACTIVE"):
+                                candidate_models.append((model_id_strong, model_config_strong))
+                        candidate_models.sort(key=lambda x: x[1].routing.order)
+                    
+                    if not candidate_models:
+                        raise LLMClientError("No active models in strong_tier after timeout escalation")
+                    
+                    # Reset tier for metrics
+                    tier = "strong"
+                    # Break and restart loop with strong models
+                    break
+                else:
+                    raise
             except Exception as e:
                 error_msg = str(e).lower()
                 # Check for throttle/rate limit errors
@@ -423,7 +538,7 @@ class Router:
             response_text=response.content,
             model_used=model_used,
             latency_ms=total_latency_ms,
-            judge_invoked=True,
+            judge_invoked=not judge_skipped,
             judge_latency_ms=judge_latency_ms,
             complexity_score=complexity_score,
             impact_scope=impact_scope,
@@ -560,6 +675,7 @@ async def route_request(
     request_id: Optional[str] = None,
     client_ip: Optional[str] = None,
     tier: Optional[str] = None,
+    use_judge: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     High-level function that creates a database session and routes a single request.
@@ -571,13 +687,14 @@ async def route_request(
         request_id: Unique request identifier
         client_ip: Client IP address
         tier: User tier ('free', 'paid', 'premium')
+        use_judge: Force judge call (true), skip judge (false), or conditional mode (None)
     """
     with get_db() as db:
         router = Router(db)
         # Ensure session exists with correct tier before routing
         if tier:
             router.budget.get_or_create_session(session_id, client_ip=client_ip, tier=tier)
-        result = await router.route(session_id, prompt, messages, request_id, client_ip)
+        result = await router.route(session_id, prompt, messages, request_id, client_ip, use_judge)
         return result
 
 
