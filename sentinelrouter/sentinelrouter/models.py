@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Text,
+    Index,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -92,3 +93,52 @@ class EscalationLog(Base):
 
     # Relationships
     session = relationship("Session", back_populates="escalation_logs")
+
+
+class SemanticCacheEntry(Base):
+    """
+    Stores individual request/response observations keyed by semantic hash.
+    """
+
+    __tablename__ = "semantic_cache_entries"
+
+    entry_id = Column(Integer, primary_key=True, autoincrement=True)
+    semantic_hash = Column(String, index=True)
+    context_hash = Column(String, index=True, nullable=True)
+    prompt_preview = Column(Text, nullable=True)
+    response_preview = Column(Text, nullable=True)
+    latency_ms = Column(Float, default=0.0)
+    judge_invoked = Column(Boolean, default=True)
+    judge_latency_ms = Column(Float, nullable=True)
+    model_used = Column(String)
+    complexity_score = Column(Float, nullable=True)
+    impact_scope = Column(String, nullable=True)
+    cost = Column(Float, default=0.0)
+    total_tokens = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class SemanticCacheStats(Base):
+    """
+    Aggregated statistics per semantic hash for fast confidence calculations.
+    """
+
+    __tablename__ = "semantic_cache_stats"
+
+    semantic_hash = Column(String, primary_key=True)
+    total_calls = Column(Integer, default=0)
+    weak_calls = Column(Integer, default=0)
+    strong_calls = Column(Integer, default=0)
+    judge_invocations = Column(Integer, default=0)
+    total_latency_ms = Column(Float, default=0.0)
+    total_latency_ms_sq = Column(Float, default=0.0)
+    total_cost = Column(Float, default=0.0)
+    total_tokens = Column(Integer, default=0)
+    last_model = Column(String, nullable=True)
+    last_called_at = Column(DateTime, default=datetime.utcnow)
+    first_seen_at = Column(DateTime, default=datetime.utcnow)
+
+
+# Helpful indexes for faster lookups
+Index("ix_semantic_cache_stats_last_called", SemanticCacheStats.last_called_at)
+Index("ix_semantic_cache_entries_semantic_hash_created", SemanticCacheEntry.semantic_hash, SemanticCacheEntry.created_at)

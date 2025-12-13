@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     cycle_detection_window_size: int = Field(100, env="CYCLE_DETECTION_WINDOW_SIZE")
     cycle_detection_simhash_threshold: int = Field(3, env="CYCLE_DETECTION_SIMHASH_THRESHOLD")
 
+    # Semantic cache
+    semantic_cache_min_samples: int = Field(3, env="SEMANTIC_CACHE_MIN_SAMPLES")
+    semantic_cache_confidence_threshold: float = Field(0.75, env="SEMANTIC_CACHE_CONFIDENCE_THRESHOLD")
+    semantic_cache_ttl_seconds: int = Field(7 * 24 * 3600, env="SEMANTIC_CACHE_TTL_SECONDS")
+    semantic_cache_max_entries: int = Field(10000, env="SEMANTIC_CACHE_MAX_ENTRIES")
+
     # Database
     database_url: str = Field("sqlite:///./data/sentinelrouter.db", env="DATABASE_URL")
     database_path: str = Field("/data/sentinelrouter.db", env="DATABASE_PATH")
