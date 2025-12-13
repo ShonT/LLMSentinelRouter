@@ -122,6 +122,7 @@ async def test_route_success_weak(router):
             session_id="test_session",
             prompt="test prompt",
             messages=[{"role": "user", "content": "test prompt"}],
+            use_judge=True,  # Force judge call for test
         )
 
     assert result["model_used"] == "deepseek-chat"
@@ -152,6 +153,7 @@ async def test_route_success_strong(router):
             session_id="test_session",
             prompt="complex prompt",
             messages=[{"role": "user", "content": "complex prompt"}],
+            use_judge=True,  # Force judge call for test
         )
 
     assert result["model_used"] in ["anthropic", "claude-3-opus-20240229", "claude-opus-4-5-20251101"]
