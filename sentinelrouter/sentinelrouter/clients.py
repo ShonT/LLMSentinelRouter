@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 import httpx
 from pydantic import BaseModel
 
-from .config import settings
+from .config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +229,7 @@ class DeepSeekClient(BaseLLMClient):
     """Client for DeepSeek API."""
 
     def __init__(self):
+        settings = get_settings()  # Get settings at runtime
         super().__init__(
             api_key=settings.deepseek_api_key,
             base_url="https://api.deepseek.com",
@@ -267,6 +268,7 @@ class AnthropicClient(BaseLLMClient):
     """Client for Anthropic Claude API (Claude Opus 4.5)."""
 
     def __init__(self):
+        settings = get_settings()  # Get settings at runtime
         super().__init__(
             api_key=settings.anthropic_api_key,
             base_url="https://api.anthropic.com",
@@ -357,6 +359,7 @@ async def get_gemini_backup1_client() -> 'GeminiClient':
     """Get or create the Gemini Backup 1 client instance (gemini-2.5-flash)."""
     global _gemini_backup1_client
     if _gemini_backup1_client is None:
+        settings = get_settings()
         _gemini_backup1_client = GeminiClient(
             api_key=settings.gemini_backup1_api_key,
             model_id="gemini-2.5-flash"
@@ -368,6 +371,7 @@ async def get_gemini_backup2_client() -> 'GeminiClient':
     """Get or create the Gemini Backup 2 client instance (gemini-2.5-flash-lite)."""
     global _gemini_backup2_client
     if _gemini_backup2_client is None:
+        settings = get_settings()
         _gemini_backup2_client = GeminiClient(
             api_key=settings.gemini_backup2_api_key,
             model_id="gemini-2.5-flash-lite"
@@ -379,6 +383,7 @@ async def get_gemini_flash_latest_client() -> 'GeminiClient':
     """Get or create the Gemini Flash Latest client instance."""
     global _gemini_flash_latest_client
     if _gemini_flash_latest_client is None:
+        settings = get_settings()
         _gemini_flash_latest_client = GeminiClient(
             api_key=settings.gemini_backup1_api_key,  # Reuse key 1
             model_id="gemini-flash-latest"

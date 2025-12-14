@@ -12,7 +12,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session as DBSession
 
 from .models import Session
-from .config import settings
+from .config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class BudgetKillSwitch:
                 session_id=session_id,
                 client_ip=client_ip,
                 tier=tier or "free",  # Default to free tier
-                max_cost_per_session=max_cost or settings.max_cost_per_session,
+                max_cost_per_session=max_cost or get_settings().max_cost_per_session,
                 current_cost=0.0,
                 is_active=True,
             )

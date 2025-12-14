@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Dict, Set, Optional, Any, Union
 
-from .config import get_unified_config, settings
+from .config import get_unified_config, get_settings
 from ..schemas.config_models import (
     UnifiedConfig,
     ModelConfig,
@@ -87,7 +87,7 @@ class StateManager:
             # Write the entire config (not just dirty models) to ensure consistency
             await self._atomic_write()
             logger.debug(
-                f"Flushed dirty models {dirty_copy} to {settings.models_config_path}"
+                f"Flushed dirty models {dirty_copy} to {get_settings().models_config_path}"
             )
         except Exception as e:
             # Re-add dirty models because the write failed
@@ -97,7 +97,7 @@ class StateManager:
 
     async def _atomic_write(self) -> None:
         """Write the current config to disk atomically."""
-        target_path = settings.models_config_path
+        target_path = get_settings().models_config_path
         # Create a temporary file in the same directory for atomic rename
         temp_fd, temp_path = tempfile.mkstemp(
             suffix=".tmp", dir=os.path.dirname(target_path), text=True

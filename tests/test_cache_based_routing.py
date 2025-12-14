@@ -10,7 +10,7 @@ Verifies that:
 import pytest
 from sentinelrouter.sentinelrouter.semantic_cache import SemanticCache
 from sentinelrouter.sentinelrouter.database import get_db, init_db
-from sentinelrouter.sentinelrouter.config import settings
+from sentinelrouter.sentinelrouter.config import get_settings
 
 
 @pytest.fixture
@@ -45,6 +45,7 @@ def cache():
 
 def test_cache_recommends_weak_after_weak_history(cache):
     """Test that cache recommends weak model after consistent weak usage."""
+    settings = get_settings()
     prompt = "What is 2+2?"
     context = [{"role": "user", "content": "What is 2+2?"}]
     
@@ -76,6 +77,7 @@ def test_cache_recommends_weak_after_weak_history(cache):
 
 def test_cache_recommends_strong_after_strong_history(cache):
     """Test that cache recommends strong model after consistent strong usage."""
+    settings = get_settings()
     prompt = "Explain quantum mechanics in detail"
     context = [{"role": "user", "content": "Explain quantum mechanics in detail"}]
     
@@ -106,6 +108,7 @@ def test_cache_recommends_strong_after_strong_history(cache):
 
 def test_cache_no_recommendation_with_mixed_history(cache):
     """Test that cache doesn't recommend when history is mixed (low confidence)."""
+    settings = get_settings()
     prompt = "Medium complexity query"
     context = [{"role": "user", "content": "Medium complexity query"}]
     
@@ -148,6 +151,7 @@ def test_cache_no_recommendation_with_mixed_history(cache):
 
 def test_cache_no_recommendation_insufficient_samples(cache):
     """Test that cache requires minimum samples before being confident."""
+    settings = get_settings()
     prompt = "New query"
     context = [{"role": "user", "content": "New query"}]
     
@@ -174,6 +178,7 @@ def test_cache_no_recommendation_insufficient_samples(cache):
 
 def test_cache_stats_tracking(cache):
     """Test that cache properly tracks statistics."""
+    settings = get_settings()
     prompt = "Test query"
     context = [{"role": "user", "content": "Test query"}]
     

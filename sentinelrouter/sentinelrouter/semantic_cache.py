@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from .config import settings
+from .config import get_settings
 from .models import SemanticCacheEntry, SemanticCacheStats
 from .semantic_hash import compute_simhash, semantic_hash_for_payload
 
@@ -48,10 +48,10 @@ class SemanticCache:
         max_entries: Optional[int] = None,
     ):
         self.db = db_session
-        self.min_samples = min_samples or settings.semantic_cache_min_samples
-        self.confidence_threshold = confidence_threshold or settings.semantic_cache_confidence_threshold
-        self.ttl_seconds = ttl_seconds or settings.semantic_cache_ttl_seconds
-        self.max_entries = max_entries or settings.semantic_cache_max_entries
+        self.min_samples = min_samples or get_settings().semantic_cache_min_samples
+        self.confidence_threshold = confidence_threshold or get_settings().semantic_cache_confidence_threshold
+        self.ttl_seconds = ttl_seconds or get_settings().semantic_cache_ttl_seconds
+        self.max_entries = max_entries or get_settings().semantic_cache_max_entries
 
     # ------------------------------------------------------------------ Hashing
     def build_semantic_hash(self, prompt: str, context: Optional[Any] = None) -> str:
@@ -106,9 +106,9 @@ class SemanticCache:
         stats.last_model = model_used
         stats.last_called_at = datetime.utcnow()
 
-        if model_used == settings.weak_model_id:
+        if model_used == get_settings().weak_model_id:
             stats.weak_calls += 1
-        elif model_used == settings.strong_model_id:
+        elif model_used == get_settings().strong_model_id:
             stats.strong_calls += 1
 
     # ------------------------------------------------------------------ Public API

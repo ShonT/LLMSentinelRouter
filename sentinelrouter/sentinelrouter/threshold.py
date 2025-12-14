@@ -11,7 +11,8 @@ from typing import List, Optional
 from collections import deque
 from datetime import datetime, timedelta
 
-from .config import settings
+from .config import get_settings
+
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class DynamicThreshold:
         window_size: int = None,
         initial_threshold: float = None,
     ):
+        settings = get_settings()
         self.target_rate = target_rate or settings.target_escalation_rate
         self.window_size = window_size or settings.rolling_window_size
         self.threshold = initial_threshold or settings.initial_threshold

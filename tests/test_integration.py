@@ -34,8 +34,7 @@ class TestIntegration:
     @pytest.fixture(scope="class")
     def test_db(self):
         """Create a test database."""
-        from sentinelrouter.sentinelrouter.database import Base
-        from sentinelrouter.sentinelrouter.models import Session as SessionModel
+        from sentinelrouter.sentinelrouter.models import Base, Session as SessionModel
         
         engine = create_engine(TEST_DATABASE_URL)
         Base.metadata.create_all(engine)
@@ -276,7 +275,7 @@ class TestOpenAICompatibility:
     @pytest.fixture
     def test_db(self):
         """Create a test database."""
-        from sentinelrouter.sentinelrouter.database import Base
+        from sentinelrouter.sentinelrouter.models import Base
         
         engine = create_engine(TEST_DATABASE_URL)
         Base.metadata.create_all(engine)
@@ -350,7 +349,7 @@ class TestAuditTrail:
     @pytest.fixture
     def test_db(self):
         """Create a test database."""
-        from sentinelrouter.sentinelrouter.database import Base
+        from sentinelrouter.sentinelrouter.models import Base
         
         engine = create_engine(TEST_DATABASE_URL)
         Base.metadata.create_all(engine)
@@ -485,7 +484,7 @@ class TestRequirementsCoverage:
     @pytest.fixture
     def test_db(self):
         """Create a test database."""
-        from sentinelrouter.sentinelrouter.database import Base
+        from sentinelrouter.sentinelrouter.models import Base
         
         engine = create_engine(TEST_DATABASE_URL)
         Base.metadata.create_all(engine)
@@ -594,19 +593,21 @@ class TestRequirementsCoverage:
 
 
 @pytest.mark.skipif(
-    not os.getenv("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY") == "dummy" or
-    not os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY") == "dummy",
+    not os.getenv("DEEPSEEK_API_KEY") or 
+    os.getenv("DEEPSEEK_API_KEY") in ["dummy", "mock-deepseek-key"] or
+    not os.getenv("ANTHROPIC_API_KEY") or 
+    os.getenv("ANTHROPIC_API_KEY") in ["dummy", "mock-anthropic-key"],
     reason="Real API keys not set - skipping live API tests"
 )
 class TestLiveAPI:
     """Tests that make real API calls (only run when API keys are set)."""
-    
+
     @pytest.mark.asyncio
     async def test_live_deepseek_call(self):
         """Test real DeepSeek API call."""
         from sentinelrouter.sentinelrouter.clients import get_deepseek_client
-        
-        client = get_deepseek_client()
+
+        client = await get_deepseek_client()
         messages = [{"role": "user", "content": "Say 'test' and nothing else."}]
         
         response = await client.chat_completion(messages)
@@ -621,7 +622,7 @@ class TestLiveAPI:
         """Test real Anthropic API call."""
         from sentinelrouter.sentinelrouter.clients import get_anthropic_client
         
-        client = get_anthropic_client()
+        client = await get_anthropic_client()
         messages = [{"role": "user", "content": "Say 'test' and nothing else."}]
         
         response = await client.chat_completion(messages)
@@ -630,7 +631,3 @@ class TestLiveAPI:
         assert len(response.content) > 0
         assert response.cost > 0
         assert response.model is not None
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])

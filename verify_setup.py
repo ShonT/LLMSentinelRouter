@@ -13,7 +13,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from sentinelrouter.sentinelrouter.clients import get_deepseek_client, get_anthropic_client
-from sentinelrouter.sentinelrouter.config import settings
+from sentinelrouter.sentinelrouter.config import get_settings
+
+settings = get_settings()
 
 async def test_deepseek():
     """Test DeepSeek API connection."""

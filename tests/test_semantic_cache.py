@@ -5,12 +5,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 # Ensure required settings are present before importing settings-dependent modules
-os.environ.setdefault("DEEPSEEK_API_KEY", "test-key")
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+os.environ["DEEPSEEK_API_KEY"] = "mock-deepseek-key"
+os.environ["ANTHROPIC_API_KEY"] = "mock-anthropic-key"
 
 from sentinelrouter.sentinelrouter.models import Base  # noqa: E402
 from sentinelrouter.sentinelrouter.semantic_cache import SemanticCache  # noqa: E402
-from sentinelrouter.sentinelrouter.config import settings  # noqa: E402
+from sentinelrouter.sentinelrouter.config import get_settings
+
+settings = get_settings()
 
 
 def _make_cache(min_samples: int = 3):

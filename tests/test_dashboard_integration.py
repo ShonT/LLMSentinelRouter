@@ -10,7 +10,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from sentinelrouter.sentinelrouter.state_manager import get_state_manager
 from sentinelrouter.sentinelrouter.router_logic import route_request
-from sentinelrouter.sentinelrouter.database import SessionLocal
+from sentinelrouter.sentinelrouter.database import get_session_local
 
 
 @pytest.mark.asyncio
@@ -112,7 +112,7 @@ class TestDashboardConfigIntegration:
         from sentinelrouter.sentinelrouter.budget import BudgetKillSwitch
         from sentinelrouter.sentinelrouter.models import Session
         
-        db = SessionLocal()
+        db = get_session_local()()
         try:
             budget = BudgetKillSwitch(db)
             
@@ -207,7 +207,7 @@ class TestTierBasedFeatures:
         """Test that sessions default to free tier."""
         from sentinelrouter.sentinelrouter.budget import BudgetKillSwitch
         
-        db = SessionLocal()
+        db = get_session_local()()
         try:
             budget = BudgetKillSwitch(db)
             
@@ -228,7 +228,7 @@ class TestTierBasedFeatures:
         """Test that session tier can be updated."""
         from sentinelrouter.sentinelrouter.models import Session
         
-        db = SessionLocal()
+        db = get_session_local()()
         try:
             from sentinelrouter.sentinelrouter.budget import BudgetKillSwitch
             budget = BudgetKillSwitch(db)

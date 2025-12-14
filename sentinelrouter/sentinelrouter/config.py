@@ -86,7 +86,15 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
 
 
-settings = Settings()
+# Lazy initialization of settings to avoid validation errors during imports
+def get_settings() -> Settings:
+    """Return the application settings, initializing if necessary."""
+    global _settings_instance
+    if _settings_instance is None:
+        _settings_instance = Settings()
+    return _settings_instance
+
+_settings_instance = None
 
 
 def get_database_url() -> str:
@@ -94,6 +102,7 @@ def get_database_url() -> str:
     Return the database URL, preferring DATABASE_URL if set,
     otherwise constructing from DATABASE_PATH.
     """
+    settings = get_settings()
     if settings.database_url:
         return settings.database_url
     return f"sqlite:///{settings.database_path}"
@@ -104,6 +113,7 @@ def load_unified_config() -> UnifiedConfig:
     Load the unified configuration from the JSON file specified in settings.
     If the file does not exist, create a default configuration and write it.
     """
+    settings = get_settings()
     path = settings.models_config_path
     if not os.path.exists(path):
         # Ensure the directory exists

@@ -15,7 +15,7 @@ try:
 except ImportError:
     nx = None  # type: ignore
 
-from .config import settings
+from .config import get_settings
 from .semantic_hash import compute_simhash, hamming_distance
 
 logger = logging.getLogger(__name__)

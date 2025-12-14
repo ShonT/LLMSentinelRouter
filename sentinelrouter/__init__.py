@@ -8,6 +8,6 @@ __description__ = "Production-ready local API gateway for budget‑controlled LL
 
 from .sentinelrouter.server import app
 from .sentinelrouter.router_logic import Router
-from .sentinelrouter.config import settings
+from .sentinelrouter.config import get_settings
 
-__all__ = ["app", "Router", "settings"]
+__all__ = ["app", "Router", "get_settings"]

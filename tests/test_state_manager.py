@@ -106,10 +106,12 @@ async def state_manager(temp_config_file, monkeypatch):
     """Create a StateManager instance with a temporary config file."""
     import json
     from sentinelrouter.schemas.config_models import UnifiedConfig
-    from sentinelrouter.sentinelrouter import config as config_module
+    from sentinelrouter.sentinelrouter.config import get_settings
     
-    # Patch settings to use the temp config file path
-    monkeypatch.setattr(config_module.settings, 'models_config_path', str(temp_config_file))
+    # Patch get_settings to return settings with temp config file path
+    mock_settings = get_settings()
+    mock_settings.models_config_path = str(temp_config_file)
+    monkeypatch.setattr('sentinelrouter.sentinelrouter.config.get_settings', lambda: mock_settings)
     
     # Load config directly from the temp file
     with open(temp_config_file, 'r') as f:
@@ -422,9 +424,14 @@ async def test_singleton():
         temp_path = f.name
     
     try:
-        from sentinelrouter.sentinelrouter import config as app_config
+        from sentinelrouter.sentinelrouter.config import get_settings
         import unittest.mock as mock
-        with mock.patch.object(app_config.settings, 'models_config_path', temp_path):
+        
+        # Mock get_settings to return a settings object with our temp path
+        mock_settings = get_settings()
+        mock_settings.models_config_path = temp_path
+        
+        with mock.patch('sentinelrouter.sentinelrouter.config.get_settings', return_value=mock_settings):
             manager1 = await get_state_manager()
             manager2 = await get_state_manager()
             assert manager1 is manager2

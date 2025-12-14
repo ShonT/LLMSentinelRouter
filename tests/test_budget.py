@@ -11,7 +11,7 @@ from datetime import datetime
 
 from sentinelrouter.sentinelrouter.budget import BudgetKillSwitch
 from sentinelrouter.sentinelrouter.models import Base, Session as SessionModel
-from sentinelrouter.sentinelrouter.config import Settings
+from sentinelrouter.sentinelrouter.config import get_settings
 
 
 @pytest.fixture

@@ -15,12 +15,11 @@ import uvicorn
 from .database import get_db, init_db
 from .router_logic import Router, route_request
 from .logging_audit import setup_logging
-from .config import settings
+from .config import get_settings
 from .budget import BudgetKillSwitch
 from .models import Session as SessionModel, RoutingDecision
 
-# Setup logging
-setup_logging()
+# Initialize logger
 logger = logging.getLogger(__name__)
 
 # Create FastAPI app
@@ -35,14 +34,17 @@ app = FastAPI(
 # CORS middleware - configurable via CORS_ORIGINS env var
 # Set CORS_ORIGINS="https://example.com,https://app.example.com" for production
 # or CORS_ORIGINS="*" for development (default)
-cors_origins = settings.cors_origins.split(",") if settings.cors_origins != "*" else ["*"]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS will be configured on startup event
+def configure_cors():
+    settings = get_settings()
+    cors_origins = settings.cors_origins.split(",") if settings.cors_origins != "*" else ["*"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # ============================================================================
 # Middleware
@@ -135,6 +137,7 @@ class ErrorResponse(BaseModel):
 async def startup_event():
     """Initialize database and other resources on startup."""
     logger.info("Starting SentinelRouter server...")
+    configure_cors()
     init_db()
     logger.info("Database initialized.")
 
@@ -373,7 +376,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 if __name__ == "__main__":
     import threading
     from .dashboard import start_dashboard_server
-    
+
     # Start dashboard server in a separate thread
     dashboard_thread = threading.Thread(
         target=start_dashboard_server,
@@ -382,8 +385,9 @@ if __name__ == "__main__":
     )
     dashboard_thread.start()
     logger.info("Dashboard server started on http://localhost:8001")
-    
+
     # Start main API server
+    settings = get_settings()
     uvicorn.run(
         "sentinelrouter.server:app",
         host=settings.host,

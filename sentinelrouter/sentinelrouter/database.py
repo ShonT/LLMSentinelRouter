@@ -7,20 +7,22 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session as SQLAlchemySession
 
-from .config import settings
-from .models import Base
+from .config import get_settings
 
-logger = logging.getLogger(__name__)
+# Lazy initialization of engine to avoid validation errors during imports
+def get_engine():
+    """Return the database engine, initializing if necessary."""
+    settings = get_settings()
+    return create_engine(
+        settings.database_url,
+        echo=False,  # Set to True for SQL logging
+        connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
+    )
 
-# Create engine
-engine = create_engine(
-    settings.database_url,
-    echo=False,  # Set to True for SQL logging
-    connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
-)
-
-# Session factory
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Lazy initialization of SessionLocal
+def get_session_local():
+    """Return the sessionmaker, initializing if necessary."""
+    return sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
 
 
 def init_db() -> None:
@@ -51,7 +53,7 @@ def get_db() -> SQLAlchemySession:
             db.add(...)
             db.commit()
     """
-    db = SessionLocal()
+    db = get_session_local()()
     try:
         yield db
         db.commit()
@@ -68,4 +70,4 @@ def get_db_session() -> SQLAlchemySession:
     Return a database session (without automatic commit/rollback).
     Caller must manage commit/rollback and close.
     """
-    return SessionLocal()
+    return get_session_local()()

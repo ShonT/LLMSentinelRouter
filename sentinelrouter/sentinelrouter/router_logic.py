@@ -25,7 +25,7 @@ from .clients import (
     LLMClientError
 )
 from .logging_audit import LoggingAudit
-from .config import settings, get_unified_config
+from .config import get_settings
 from .database import get_db
 from .models import RoutingDecision
 from .metrics import get_metrics_collector

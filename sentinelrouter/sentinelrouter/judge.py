@@ -19,7 +19,7 @@ from .clients import (
     get_gemini_flash_latest_client,
     LLMResponse
 )
-from .config import settings
+from .config import get_settings
 from .judge_registry import JudgeRegistry, JudgeModel, JudgeHealthTracker
 
 logger = logging.getLogger(__name__)

@@ -17,13 +17,14 @@ from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy.orm import Session as DBSession
 
 from .models import RoutingDecision, EscalationLog
-from .config import settings
+from .config import get_settings
 
-# Ensure logs directory exists
-logs_dir = Path(settings.log_dir)
-logs_dir.mkdir(exist_ok=True)
-requests_logs_dir = logs_dir / "requests"
-requests_logs_dir.mkdir(exist_ok=True)
+
+# Lazy initialization of logs_dir to avoid validation errors during imports
+def get_logs_dir():
+    """Return the logs directory, initializing if necessary."""
+    return Path(get_settings().log_dir)
+
 
 # Thread pool for asynchronous file I/O
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -56,18 +57,19 @@ def setup_logging() -> None:
     Configure the root logger with a rotating file handler (JSON) and console handler.
     """
     root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, settings.log_level.upper()))
+    root_logger.setLevel(getattr(logging, get_settings().log_level.upper()))
 
     # Remove any existing handlers
     root_logger.handlers.clear()
 
     # File handler (JSON) - only if enabled
-    if settings.enable_file_logging:
+    if get_settings().enable_file_logging:
+        logs_dir = get_logs_dir()  # Access logs_dir at runtime
         log_file = logs_dir / "sentinelrouter.log"
         file_handler = logging.handlers.RotatingFileHandler(
             log_file,
-            maxBytes=settings.log_rotation_max_bytes,
-            backupCount=settings.log_rotation_backup_count,
+            maxBytes=get_settings().log_rotation_max_bytes,
+            backupCount=get_settings().log_rotation_backup_count,
             encoding="utf-8",
         )
         file_handler.setFormatter(JSONFormatter())
@@ -81,7 +83,7 @@ def setup_logging() -> None:
     console_handler.setFormatter(console_formatter)
     root_logger.addHandler(console_handler)
 
-    logging.info("Logging configured (level=%s)", settings.log_level)
+    logging.info("Logging configured (level=%s)", get_settings().log_level)
 
 
 class AuditLogger:
@@ -231,8 +233,11 @@ class LoggingAudit:
     def __init__(self, db_session: DBSession):
         self.db = db_session
         self.audit_logger = AuditLogger(db_session)
+        logs_dir = get_logs_dir()
+        requests_logs_dir = logs_dir / "requests"
+        requests_logs_dir.mkdir(parents=True, exist_ok=True)
         self.file_logger = RequestResponseLogger(requests_logs_dir)
-        self.enable_file_logging = settings.enable_file_logging
+        self.enable_file_logging = get_settings().enable_file_logging
 
     async def log_request_response(
         self,
@@ -396,6 +401,8 @@ async def cleanup_old_logs(retention_days: int = 30) -> None:
     Delete log files older than `retention_days`.
     Should be called periodically (e.g., daily).
     """
+    logs_dir = get_logs_dir()
+    requests_logs_dir = logs_dir / "requests"
     cutoff = datetime.utcnow() - timedelta(days=retention_days)
     for log_file in requests_logs_dir.glob("*.json"):
         stat = log_file.stat()
