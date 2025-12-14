@@ -241,6 +241,56 @@ class MetricsCollector:
         
         self._write_metric(metric)
     
+    def record_event(self, event_type: str, data: Dict[str, Any]):
+        """
+        Generic method to record any event with arbitrary data.
+        Useful for new metrics without adding specific methods.
+        """
+        metric = {
+            "type": event_type,
+            "timestamp": time.time(),
+            **data
+        }
+        self._write_metric(metric)
+    
+    def record_rate_limit_preemptive_skip(
+        self,
+        model_id: str,
+        tier: str,
+        limit_type: str,
+        current_usage: Dict[str, int],
+        limit_values: Dict[str, int]
+    ):
+        """Record when a model is skipped due to preemptive rate limit check."""
+        metric = {
+            "type": "rate_limit_preemptive_skip",
+            "timestamp": time.time(),
+            "model_id": model_id,
+            "tier": tier,
+            "limit_type": limit_type,
+            "current_usage": current_usage,
+            "limit_values": limit_values
+        }
+        self._write_metric(metric)
+    
+    def record_rate_limit_429_error(
+        self,
+        model_id: str,
+        limit_type: str,
+        error_message: str,
+        current_usage: Dict[str, int]
+    ):
+        """Record when a model returns 429 rate limit error."""
+        metric = {
+            "type": "rate_limit_429_error",
+            "timestamp": time.time(),
+            "model_id": model_id,
+            "limit_type": limit_type,
+            "error_message": error_message,
+            "current_usage": current_usage
+        }
+        self._write_metric(metric)
+    
     def _write_metric(self, metric: Dict[str, Any]):
         """Write metric to file and in-memory buffer."""
         with self.lock:

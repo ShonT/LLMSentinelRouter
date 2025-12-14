@@ -19,7 +19,7 @@ SentinelRouter is a Python‑based local API gateway that sits between an autono
 
 ## Architecture
 
-For a detailed design, see [sentinelrouter_design.md](sentinelrouter_design.md).
+For a detailed design, see [documentation/architecture/overview.md](documentation/architecture/overview.md). For comprehensive documentation, visit the [documentation index](documentation/index.md).
 
 ## Quick Start
 

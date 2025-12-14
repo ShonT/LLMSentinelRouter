@@ -32,10 +32,12 @@ from .metrics import get_metrics_collector
 from .throttle_manager import get_throttle_manager
 from .state_manager import get_state_manager
 from .semantic_cache import SemanticCache
+from .rate_limiter import get_rate_limiter
 
 logger = logging.getLogger(__name__)
 metrics = get_metrics_collector()
 throttle_manager = get_throttle_manager()
+rate_limiter = get_rate_limiter(safety_margin=0.95)
 
 # Global cache for cycle detectors (persistent across requests)
 _CYCLE_DETECTORS_CACHE: Dict[str, CycleDetector] = {}
@@ -222,6 +224,14 @@ class Router:
             strict_mode,
             cycle_detected,
         )
+        
+        # Log routing decision
+        logger.info(
+            f"Routing decision: {route_decision.upper()} tier | "
+            f"complexity={complexity_score:.3f}, threshold={threshold:.3f}, "
+            f"impact={impact_scope}, strict_mode={strict_mode}, cycle_detected={cycle_detected} | "
+            f"Reason: {decision_reason}"
+        )
 
         # 5. Select client and make the call with failover support, using StateManager
         response = None
@@ -293,8 +303,8 @@ class Router:
                 logger.warning(f"Model {model_id} exhausted until {model_state.exhausted_until_ts}")
                 continue
 
-            # Check tier-based rate limits
-            if model_state and model_config.limits:
+            # Check tier-based rate limits with accurate time-windowed tracking
+            if model_config.limits:
                 # Get session tier to determine which limits to use
                 session_obj = self.budget.get_or_create_session(session_id)
                 session_tier = getattr(session_obj, 'tier', 'free')
@@ -308,21 +318,40 @@ class Router:
                     # Fallback to old limits field
                     active_limits = model_config.limits
                 
-                # Check daily request limit
-                if model_state.requests_today >= active_limits.requests_per_day:
-                    logger.warning(
-                        f"Model {model_id} daily limit reached for {session_tier} tier "
-                        f"({model_state.requests_today}/{active_limits.requests_per_day})"
-                    )
-                    continue
+                # Estimate tokens for this request (rough estimate based on prompt length)
+                estimated_tokens = len(prompt.split()) * 2  # ~2 tokens per word average
                 
-                # Check RPM limit (simplified - would need time-windowed tracking for accuracy)
-                if model_state.current_rpm >= active_limits.requests_per_minute:
+                # Check rate limits using sliding window rate limiter
+                allowed, limit_reason, usage_stats = await rate_limiter.check_rate_limits(
+                    model_id=model_id,
+                    rpm_limit=active_limits.requests_per_minute if active_limits.requests_per_minute else None,
+                    tpm_limit=active_limits.tokens_per_minute if active_limits.tokens_per_minute else None,
+                    rpd_limit=active_limits.requests_per_day if active_limits.requests_per_day else None,
+                    tpd_limit=getattr(active_limits, 'tokens_per_day', None),
+                    estimated_tokens=estimated_tokens
+                )
+                
+                if not allowed:
                     logger.warning(
-                        f"Model {model_id} RPM limit reached for {session_tier} tier "
-                        f"({model_state.current_rpm}/{active_limits.requests_per_minute})"
+                        f"Model {model_id} rate limit check failed for {session_tier} tier: {limit_reason} | "
+                        f"Current usage: RPM={usage_stats['requests_last_minute']}/{active_limits.requests_per_minute}, "
+                        f"TPM={usage_stats['tokens_last_minute']}/{active_limits.tokens_per_minute}, "
+                        f"RPD={usage_stats['requests_last_day']}/{active_limits.requests_per_day}"
                     )
+                    # Record metric for preemptive rate limit skip
+                    metrics.record_event("rate_limit_preemptive_skip", {
+                        "model_id": model_id,
+                        "tier": session_tier,
+                        "reason": limit_reason,
+                        "usage": usage_stats
+                    })
                     continue
+                else:
+                    logger.debug(
+                        f"Model {model_id} rate limit check passed | "
+                        f"Usage: RPM={usage_stats['requests_last_minute']}/{active_limits.requests_per_minute}, "
+                        f"TPM={usage_stats['tokens_last_minute']}/{active_limits.tokens_per_minute}"
+                    )
 
             client_getter = client_getters.get(model_id)
             if client_getter is None:
@@ -345,7 +374,7 @@ class Router:
                         # Use asyncio.wait_for with 15s timeout
                         response = await asyncio.wait_for(
                             client.chat_completion(messages),
-                            timeout=15.0
+                            timeout=150.0
                         )
                         latency_ms = (time.time() - start_time) * 1000
                         logger.info(f"Weak model completed in {latency_ms:.0f}ms (under 15s threshold)")
@@ -427,17 +456,19 @@ class Router:
                         tps = total_tokens / (latency_ms / 1000)
                         metrics.record_tokens_per_second(model_id, tier, tps, total_tokens)
 
-                # Update model state in StateManager
+                # Update rate limiter with actual tokens used (for accurate time-windowed tracking)
+                await rate_limiter.record_request(model_id, total_tokens)
+                
+                # Update model state in StateManager (legacy tracking for compatibility)
                 await self.state_manager.increment_counter(model_id, "requests_today", 1)
                 if total_tokens > 0:
                     await self.state_manager.increment_counter(model_id, "tokens_today", total_tokens)
                 if cost_incurred > 0:
                     await self.state_manager.increment_counter(model_id, "total_cost_session", cost_incurred)
                 
-                # Update RPM and timestamp
+                # Update timestamp (RPM now tracked by rate_limiter)
                 await self.state_manager.update_model_state(
                     model_id, 
-                    current_rpm=1,  # This should be calculated based on recent requests
                     last_updated_ts=datetime.utcnow()
                 )
 
@@ -494,6 +525,34 @@ class Router:
                     'rate limit', 'throttle', '429', 'quota exceeded', 'too many requests'
                 ])
                 if is_throttle:
+                    # Determine rate limit type from error message
+                    limit_type = "unknown"
+                    if any(kw in error_msg for kw in ['token', 'tpm', 'tokens per minute']):
+                        limit_type = "tokens_per_minute"
+                    elif any(kw in error_msg for kw in ['request', 'rpm', 'requests per minute']):
+                        limit_type = "requests_per_minute"
+                    elif any(kw in error_msg for kw in ['daily', 'quota', 'day']):
+                        limit_type = "daily_quota"
+                    
+                    # Get current rate limiter stats for context
+                    usage_stats = await rate_limiter.get_usage_stats(model_id)
+                    
+                    logger.error(
+                        f"Model {model_id} hit rate limit (429): {limit_type} | "
+                        f"Error: {str(e)} | "
+                        f"Current usage: RPM={usage_stats['requests_last_minute']}, "
+                        f"TPM={usage_stats['tokens_last_minute']}, "
+                        f"RPD={usage_stats['requests_last_day']}, "
+                        f"TPD={usage_stats['tokens_last_day']}"
+                    )
+                    
+                    # Record metric for 429 error with type
+                    metrics.record_event("rate_limit_429_error", {
+                        "model_id": model_id,
+                        "limit_type": limit_type,
+                        "usage": usage_stats
+                    })
+                    
                     ban_duration = throttle_manager.record_throttle(model_id, str(e))
                     if ban_duration:
                         logger.error(f"Model {model_id} BANNED for {ban_duration}s due to throttling")
@@ -576,30 +635,43 @@ class Router:
             logger.warning(f"Cycle logged for session {session_id}")
 
         # 11. Record semantic cache entry with full request/response metadata
+        # SKIP caching if cycle detection forced the routing decision to avoid
+        # building false "confident history" for cycle-detected requests
         total_latency_ms = (time.time() - route_start) * 1000
         total_tokens = (
             response.usage.get("total_tokens", 0) if hasattr(response, "usage") and response.usage else 0
         )
-        stats = self.semantic_cache.record_interaction(
-            prompt=prompt,
-            context=messages,
-            response_text=response.content,
-            model_used=model_used,
-            latency_ms=total_latency_ms,
-            judge_invoked=not judge_skipped,
-            judge_latency_ms=judge_latency_ms,
-            complexity_score=complexity_score,
-            impact_scope=impact_scope,
-            cost=response.cost,
-            total_tokens=total_tokens,
-        )
-        # Record events are writes, not cache hits
-        metrics.record_semantic_cache_event(
-            "record",
-            stats.semantic_hash,
-            False,
-            self.semantic_cache.confidence_for_hash(stats.semantic_hash),
-        )
+        
+        if cycle_detected:
+            logger.info(
+                f"Skipping semantic cache recording for cycle-detected request "
+                f"(prevents false confident history)"
+            )
+            # Use a placeholder stats object for metrics
+            stats = type('obj', (object,), {
+                'semantic_hash': semantic_hash,
+            })
+        else:
+            stats = self.semantic_cache.record_interaction(
+                prompt=prompt,
+                context=messages,
+                response_text=response.content,
+                model_used=model_used,
+                latency_ms=total_latency_ms,
+                judge_invoked=not judge_skipped,
+                judge_latency_ms=judge_latency_ms,
+                complexity_score=complexity_score,
+                impact_scope=impact_scope,
+                cost=response.cost,
+                total_tokens=total_tokens,
+            )
+            # Record events are writes, not cache hits
+            metrics.record_semantic_cache_event(
+                "record",
+                stats.semantic_hash,
+                False,
+                self.semantic_cache.confidence_for_hash(stats.semantic_hash),
+            )
 
         return {
             "model_used": model_used,

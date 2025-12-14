@@ -1511,16 +1511,10 @@ async def get_routing_logs(
     # Load request logs if preview is requested
     request_logs = {}
     if include_preview:
-        try:
-            audit = LoggingAudit()
-            # Load recent request logs (limited to avoid performance issues)
-            for log in logs[:20]:  # Only load preview for last 20
-                if log.request_id:
-                    log_data = audit.read_request_log(log.request_id)
-                    if log_data:
-                        request_logs[log.request_id] = log_data
-        except Exception as e:
-            logger.error(f"Failed to load request logs: {e}")
+        # TODO: Implement read_request_log method in LoggingAudit class
+        # Currently LoggingAudit only writes logs, doesn't have a read method
+        # Skipping preview feature until read functionality is implemented
+        pass
     
     for log in logs:
         log_entry = {

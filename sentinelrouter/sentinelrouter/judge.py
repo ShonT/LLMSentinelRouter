@@ -61,12 +61,12 @@ async def get_judge_registry() -> JudgeRegistry:
         )
         _JUDGE_REGISTRY.register_judge(primary_judge)
         
-        # Register backup judge 1: DeepSeek (priority 1)
+        # Register backup judge 1: DeepSeek (priority 4)
         deepseek_client = await get_deepseek_client()
         backup_judge1 = JudgeModel(
             judge_id="deepseek-judge-backup1",
             client=deepseek_client,
-            priority=1,
+            priority=4,
             display_name="DeepSeek (Backup Judge 1)",
             temperature=0.1
         )
@@ -97,7 +97,7 @@ async def get_judge_registry() -> JudgeRegistry:
         logger.info(
             "✅ Judge registry initialized with 4 judges: "
             f"Primary={primary_judge.judge_id} (Gemini 2.5 Flash Lite), "
-            f"Backups=[{backup_judge1.judge_id} (DeepSeek), {backup_judge2.judge_id} (Gemini 2.5 Flash), {backup_judge3.judge_id} (Gemini Flash Latest)]"
+            f"Backups=[{backup_judge2.judge_id} (Gemini 2.5 Flash), {backup_judge3.judge_id} (Gemini Flash Latest), {backup_judge1.judge_id} (DeepSeek)]"
         )
     
     return _JUDGE_REGISTRY

@@ -139,11 +139,24 @@ async def startup_event():
     logger.info("Starting SentinelRouter server...")
     init_db()
     logger.info("Database initialized.")
+    
+    # Start rate limiter daily reset task
+    from .rate_limiter import get_rate_limiter
+    rate_limiter = get_rate_limiter()
+    rate_limiter.start()
+    logger.info("Rate limiter started.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up resources on shutdown."""
     from .clients import close_clients
+    from .rate_limiter import get_rate_limiter
+    
+    # Stop rate limiter
+    rate_limiter = get_rate_limiter()
+    await rate_limiter.stop()
+    logger.info("Rate limiter stopped.")
+    
     await close_clients()
     logger.info("Server shut down.")
 

@@ -32,10 +32,10 @@ class CycleDetector:
         - Implement pruning of old nodes (keep last 100 interactions)
     """
 
-    def __init__(self, session_id: str, window_size: int = 100, simhash_threshold: int = 3):
+    def __init__(self, session_id: str, window_size: int = 100, simhash_threshold: int = 8):
         self.session_id = session_id
         self.window_size = window_size          # keep last N interactions
-        self.simhash_threshold = simhash_threshold  # distance < 3 means cycle
+        self.simhash_threshold = simhash_threshold  # distance < 8 means cycle (increased from 3 to reduce false positives)
 
         if nx is None:
             logger.warning("networkx not installed. Cycle detection will be disabled.")
@@ -69,7 +69,7 @@ class CycleDetector:
         if cycle_detected:
             logger.warning(
                 f"Cycle detected in session {self.session_id} "
-                f"(hash distance < {self.simhash_threshold})"
+                f"(hash distance < {self.simhash_threshold}) - current hash: {current_hash}"
             )
 
         # Add to graph if networkx is available
@@ -113,6 +113,10 @@ class CycleDetector:
         for existing_hash, _ in self.recent_hashes:
             dist = hamming_distance(current_hash, existing_hash)
             if dist < self.simhash_threshold:
+                logger.debug(
+                    f"Cycle detected: current_hash={current_hash}, "
+                    f"existing_hash={existing_hash}, distance={dist}"
+                )
                 return True
         return False
 
