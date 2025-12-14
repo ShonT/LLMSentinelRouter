@@ -531,18 +531,8 @@ class Router:
         prompt_hash_int = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16)
         response_hash_int = int(hashlib.sha256(response.content.encode()).hexdigest()[:8], 16)
 
-        self.audit.log_routing_decision(
-            session_id=session_id,
-            request_id=request_id,
-            model_used=model_used,
-            complexity_score=complexity_score,
-            cost_incurred=response.cost,
-            prompt_hash=prompt_hash_int,
-            impact_scope=impact_scope,
-            reason=decision_reason,
-        )
-        
         # Log full request/response to file with tier and use_judge
+        # Note: log_request_response internally calls log_routing_decision for database logging
         await self.audit.log_request_response(
             session_id=session_id,
             request_id=request_id,
@@ -554,6 +544,8 @@ class Router:
                 "impact_scope": impact_scope,
                 "reasoning": reasoning,
                 "decision_reason": decision_reason,
+                "prompt_hash": str(prompt_hash_int),
+                "reason": decision_reason,
             },
             cost=response.cost,
             tier=tier,

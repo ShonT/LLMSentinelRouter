@@ -11,38 +11,140 @@
     }
   },
   "models": {
-    "test-model-1": {
-      "display_name": "Test Model 1",
-      "provider": "test",
-      "model_definition": "A test model",
-      "model_key": "test-model-1",
+    "deepseek-chat": {
+      "display_name": "DeepSeek Chat",
+      "provider": "deepseek",
+      "model_definition": "DeepSeek fast reasoning model",
+      "model_key": "deepseek-chat",
       "status": "ACTIVE",
       "status_valid_till": null,
       "capabilities": {
-        "modality": [
-          "text"
-        ],
-        "context_window": 128000
+        "modality": ["text"],
+        "context_window": 64000
       },
       "routing": {
         "priority_group": "fast_tier",
         "order": 1
       },
       "limits": {
-        "requests_per_minute": 10,
-        "requests_per_day": 1000,
+        "requests_per_minute": 60,
+        "requests_per_day": 10000,
         "tokens_per_minute": 500000
       },
       "free_tier_limits": {
-        "requests_per_day": 100,
-        "requests_per_minute": 5,
+        "requests_per_day": 1000,
+        "requests_per_minute": 30,
+        "tokens_per_minute": 200000,
+        "tokens_per_day": 1000000
+      },
+      "paid_tier_limits": {
+        "requests_per_day": 10000,
+        "requests_per_minute": 60,
+        "tokens_per_minute": 500000,
+        "tokens_per_day": 5000000
+      },
+      "pricing": {
+        "currency": "USD",
+        "input_cost_per_m": 0.14,
+        "output_cost_per_m": 0.28,
+        "usage_tiers": []
+      },
+      "cost": {
+        "per_call": 0.001,
+        "per_token_input": 1.4e-07,
+        "per_token_output": 2.8e-07
+      },
+      "state": {
+        "current_rpm": 0.0,
+        "requests_today": 0,
+        "tokens_today": 0,
+        "total_cost_session": 0.0,
+        "last_updated_ts": null,
+        "exhausted_until_ts": null
+      }
+    },
+    "claude-opus-4": {
+      "display_name": "Claude Opus 4",
+      "provider": "anthropic",
+      "model_definition": "Claude Opus 4.5 - Advanced reasoning",
+      "model_key": "claude-opus-4-5-20251101",
+      "status": "ACTIVE",
+      "status_valid_till": null,
+      "capabilities": {
+        "modality": ["text"],
+        "context_window": 200000
+      },
+      "routing": {
+        "priority_group": "strong_tier",
+        "order": 1
+      },
+      "limits": {
+        "requests_per_minute": 50,
+        "requests_per_day": 5000,
+        "tokens_per_minute": 400000
+      },
+      "free_tier_limits": {
+        "requests_per_day": 500,
+        "requests_per_minute": 20,
         "tokens_per_minute": 100000,
         "tokens_per_day": 500000
       },
       "paid_tier_limits": {
         "requests_per_day": 5000,
         "requests_per_minute": 50,
-        "tokens_per_minute": 2000000,
+        "tokens_per_minute": 400000,
+        "tokens_per_day": 3000000
+      },
+      "pricing": {
+        "currency": "USD",
+        "input_cost_per_m": 15.0,
+        "output_cost_per_m": 75.0,
+        "usage_tiers": []
+      },
+      "cost": {
+        "per_call": 0.05,
+        "per_token_input": 1.5e-05,
+        "per_token_output": 7.5e-05
+      },
+      "state": {
+        "current_rpm": 0.0,
+        "requests_today": 0,
+        "tokens_today": 0,
+        "total_cost_session": 0.0,
+        "last_updated_ts": null,
+        "exhausted_until_ts": null
+      }
+    },
+    "gemini-2.5-flash-lite-primary": {
+      "display_name": "Gemini 2.5 Flash Lite (Judge Primary)",
+      "provider": "gemini",
+      "model_definition": "Gemini 2.5 Flash Lite - Primary judge for complexity assessment",
+      "model_key": "AIzaSyBEgIiciMs-NIQqeoYtOfjkvCzVIAr5Fw8",
+      "status": "ACTIVE",
+      "status_valid_till": null,
+      "capabilities": {
+        "modality": ["text"],
+        "context_window": 32000
+      },
+      "routing": {
+        "priority_group": "fast_tier",
+        "order": 3
+      },
+      "limits": {
+        "requests_per_minute": 100,
+        "requests_per_day": 50000,
+        "tokens_per_minute": 1000000
+      },
+      "free_tier_limits": {
+        "requests_per_day": 50000,
+        "requests_per_minute": 100,
+        "tokens_per_minute": 1000000,
+        "tokens_per_day": 10000000
+      },
+      "paid_tier_limits": {
+        "requests_per_day": 50000,
+        "requests_per_minute": 100,
+        "tokens_per_minute": 1000000,
         "tokens_per_day": 10000000
       },
       "pricing": {
@@ -52,63 +154,61 @@
         "usage_tiers": []
       },
       "cost": {
-        "per_call": 0.01,
-        "per_token_input": 2e-06,
-        "per_token_output": 4e-06
+        "per_call": 0.0,
+        "per_token_input": 0.0,
+        "per_token_output": 0.0
       },
       "state": {
         "current_rpm": 0.0,
-        "requests_today": 777,
+        "requests_today": 0,
         "tokens_today": 0,
         "total_cost_session": 0.0,
         "last_updated_ts": null,
         "exhausted_until_ts": null
       }
     },
-    "test-model-2": {
-      "display_name": "Test Model 2",
-      "provider": "test",
-      "model_definition": "Another test model",
-      "model_key": "test-model-2",
-      "status": "BANNED",
+    "deepseek-judge-backup1": {
+      "display_name": "DeepSeek Chat (Judge Backup 1)",
+      "provider": "deepseek",
+      "model_definition": "DeepSeek Chat - First backup judge",
+      "model_key": "deepseek-chat",
+      "status": "ACTIVE",
       "status_valid_till": null,
       "capabilities": {
-        "modality": [
-          "text"
-        ],
-        "context_window": 128000
+        "modality": ["text"],
+        "context_window": 64000
       },
       "routing": {
-        "priority_group": "strong_tier",
-        "order": 1
+        "priority_group": "fast_tier",
+        "order": 4
       },
       "limits": {
-        "requests_per_minute": 5,
-        "requests_per_day": 500,
-        "tokens_per_minute": 200000
+        "requests_per_minute": 60,
+        "requests_per_day": 10000,
+        "tokens_per_minute": 500000
       },
       "free_tier_limits": {
-        "requests_per_day": 50,
-        "requests_per_minute": 2,
-        "tokens_per_minute": 50000,
-        "tokens_per_day": 200000
+        "requests_per_day": 1000,
+        "requests_per_minute": 30,
+        "tokens_per_minute": 200000,
+        "tokens_per_day": 1000000
       },
       "paid_tier_limits": {
-        "requests_per_day": 3000,
-        "requests_per_minute": 30,
-        "tokens_per_minute": 1500000,
-        "tokens_per_day": 8000000
+        "requests_per_day": 10000,
+        "requests_per_minute": 60,
+        "tokens_per_minute": 500000,
+        "tokens_per_day": 5000000
       },
       "pricing": {
         "currency": "USD",
-        "input_cost_per_m": 1.0,
-        "output_cost_per_m": 2.0,
+        "input_cost_per_m": 0.14,
+        "output_cost_per_m": 0.28,
         "usage_tiers": []
       },
       "cost": {
-        "per_call": 0.05,
-        "per_token_input": 5e-06,
-        "per_token_output": 1e-05
+        "per_call": 0.001,
+        "per_token_input": 1.4e-07,
+        "per_token_output": 2.8e-07
       },
       "state": {
         "current_rpm": 0.0,
@@ -122,17 +222,17 @@
   },
   "judge_config": {
     "model_order": [
-      "test-model-1",
-      "test-model-2"
+      "gemini-2.5-flash-lite-primary",
+      "deepseek-judge-backup1"
     ],
     "is_judge_required": false
   },
   "routing_order_config": {
     "strong_models": [
-      "test-model-2"
+      "claude-opus-4"
     ],
     "weak_models": [
-      "test-model-1"
+      "deepseek-chat"
     ]
   }
 }

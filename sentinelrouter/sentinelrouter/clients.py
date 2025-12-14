@@ -362,19 +362,19 @@ async def get_gemini_backup1_client() -> 'GeminiClient':
         settings = get_settings()
         _gemini_backup1_client = GeminiClient(
             api_key=settings.gemini_backup1_api_key,
-            model_id="gemini-2.5-flash"
+            model_id="gemini-2.0-flash-exp"
         )
     return _gemini_backup1_client
 
 
 async def get_gemini_backup2_client() -> 'GeminiClient':
-    """Get or create the Gemini Backup 2 client instance (gemini-2.5-flash-lite)."""
+    """Get or create the Gemini Backup 2 client instance (gemini-2.5-flash)."""
     global _gemini_backup2_client
     if _gemini_backup2_client is None:
         settings = get_settings()
         _gemini_backup2_client = GeminiClient(
             api_key=settings.gemini_backup2_api_key,
-            model_id="gemini-2.5-flash-lite"
+            model_id="gemini-2.5-flash"
         )
     return _gemini_backup2_client
 
@@ -385,8 +385,8 @@ async def get_gemini_flash_latest_client() -> 'GeminiClient':
     if _gemini_flash_latest_client is None:
         settings = get_settings()
         _gemini_flash_latest_client = GeminiClient(
-            api_key=settings.gemini_backup1_api_key,  # Reuse key 1
-            model_id="gemini-flash-latest"
+            api_key=settings.gemini_backup1_api_key,
+            model_id="gemini-2.0-flash"
         )
     return _gemini_flash_latest_client
 

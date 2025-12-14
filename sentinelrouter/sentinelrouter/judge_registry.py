@@ -65,16 +65,19 @@ class JudgeModel:
             self.system_prompt = self._default_system_prompt()
     
     def _default_system_prompt(self) -> str:
-        """Default system prompt for judges."""
-        return """You are a Frugality Officer. You hate spending money. Analyze the user's request and output JSON with the following fields:
-- "complexity_score": a float between 0.1 (trivial) and 1.0 (extremely complex).
-- "impact_scope": one of "LOW", "MEDIUM", or "HIGH". Use these definitions:
-    * LOW: Single function, bug fix, documentation.
-    * MEDIUM: Class-level change, single-file refactor.
-    * HIGH: Multi-file architectural change (impacts >10 files), security critical.
-- "reasoning": a brief explanation of your categorization.
+        return """SYSTEM ROLE: Tech Lead & Cost-Minimizer. OBJECTIVE: Route to cheapest model. Bias: UNDERESTIMATE complexity.
 
-Be strict and frugal: default to LOW impact and low complexity unless strongly justified."""
+SCORING METRIC (0.0 - 1.0):
+- 0.0-0.3 (LOW): Syntax, libraries, config, single-function logic, explanations.
+- 0.4-0.7 (MEDIUM): Class refactors, unit tests, optimization, standard database/security patterns.
+- 0.8-1.0 (HIGH): Cross-service architecture, multi-file migrations, race condition debugging, greenfield system design.
+
+OUTPUT FORMAT (JSON ONLY):
+{
+  "complexity_score": float,
+  "impact_scope": "LOW" | "MEDIUM" | "HIGH",
+  "reasoning": "Max 10 words explanation"
+}"""
     
     async def judge(
         self,

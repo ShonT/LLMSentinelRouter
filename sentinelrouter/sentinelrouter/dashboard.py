@@ -531,6 +531,43 @@ async def dashboard_home():
                     </div>
                 </div>
 
+                <!-- Judge Metrics Cards -->
+                <h3 style="margin: 25px 0 15px 0; color: #1e293b;">⚖️ Judge Performance</h3>
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-card-value" id="judgeSuccessRate">0%</div>
+                        <div class="metric-card-label">Judge Success Rate</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-card-value" id="judgeSkipRate">0%</div>
+                        <div class="metric-card-label">Judge Skip Rate</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-card-value" id="judgeFallbackCount">0</div>
+                        <div class="metric-card-label">Judge Fallbacks</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-card-value" id="judgeCallCount">0</div>
+                        <div class="metric-card-label">Total Judge Calls</div>
+                    </div>
+                </div>
+
+                <!-- Per-Judge Breakdown -->
+                <div class="chart-container">
+                    <div class="chart-title">📊 Per-Judge Breakdown</div>
+                    <div id="judgeBreakdown" style="padding: 20px;">
+                        <div style="color: #64748b; text-align: center;">Loading judge statistics...</div>
+                    </div>
+                </div>
+
+                <!-- Fallback Chain Visualization -->
+                <div class="chart-container">
+                    <div class="chart-title">🔄 Judge Fallback Chain (Last 20)</div>
+                    <div id="fallbackChain" style="padding: 20px; max-height: 400px; overflow-y: auto;">
+                        <div style="color: #64748b; text-align: center;">No fallbacks recorded</div>
+                    </div>
+                </div>
+
                 <!-- Latency Line Charts -->
                 <div class="chart-container">
                     <div class="chart-title">📈 Latency Trends (Last 50 Requests)</div>
@@ -741,6 +778,22 @@ async def dashboard_home():
                     document.getElementById('avgStrongLatency').textContent = 
                         (data.strong_model_latency?.avg_ms || 0).toFixed(0) + 'ms';
                     
+                    // Update judge metric cards
+                    document.getElementById('judgeSuccessRate').textContent = 
+                        (data.judge_success_rate || 0).toFixed(1) + '%';
+                    document.getElementById('judgeSkipRate').textContent = 
+                        (data.judge_skip_rate || 0).toFixed(1) + '%';
+                    document.getElementById('judgeFallbackCount').textContent = 
+                        data.judge_fallback_count || 0;
+                    document.getElementById('judgeCallCount').textContent = 
+                        data.judge_call_count || 0;
+                    
+                    // Render per-judge breakdown
+                    renderJudgeBreakdown(data.judge_breakdown || {});
+                    
+                    // Render fallback chain
+                    renderFallbackChain(data.fallback_chain || []);
+                    
                     // Update latency chart
                     updateLatencyChart(data.latency_series);
                 } catch (error) {
@@ -896,6 +949,78 @@ async def dashboard_home():
             async function startAllModels() {
                 await fetch('/api/dashboard/start-all', { method: 'POST' });
                 updateLiveTraffic();
+            }
+
+            function renderJudgeBreakdown(breakdown) {
+                const container = document.getElementById('judgeBreakdown');
+                if (!breakdown || Object.keys(breakdown).length === 0) {
+                    container.innerHTML = '<div style="color: #64748b; text-align: center;">No judge data available</div>';
+                    return;
+                }
+                
+                const judges = Object.entries(breakdown).sort((a, b) => b[1].calls - a[1].calls);
+                
+                container.innerHTML = `
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid #e2e8f0; text-align: left;">
+                                <th style="padding: 12px; font-weight: 600; color: #1e293b;">Judge ID</th>
+                                <th style="padding: 12px; font-weight: 600; color: #1e293b;">Calls</th>
+                                <th style="padding: 12px; font-weight: 600; color: #1e293b;">Success</th>
+                                <th style="padding: 12px; font-weight: 600; color: #1e293b;">Failures</th>
+                                <th style="padding: 12px; font-weight: 600; color: #1e293b;">Success Rate</th>
+                                <th style="padding: 12px; font-weight: 600; color: #1e293b;">Avg Latency</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${judges.map(([judgeId, stats]) => {
+                                const successRate = stats.calls > 0 ? (stats.success / stats.calls * 100).toFixed(1) : 0;
+                                const statusColor = successRate >= 95 ? '#10b981' : successRate >= 80 ? '#f59e0b' : '#ef4444';
+                                return `
+                                    <tr style="border-bottom: 1px solid #f1f5f9;">
+                                        <td style="padding: 12px; font-family: monospace; color: #475569;">${judgeId}</td>
+                                        <td style="padding: 12px; color: #64748b;">${stats.calls}</td>
+                                        <td style="padding: 12px; color: #10b981;">${stats.success}</td>
+                                        <td style="padding: 12px; color: #ef4444;">${stats.failures}</td>
+                                        <td style="padding: 12px; color: ${statusColor}; font-weight: 600;">${successRate}%</td>
+                                        <td style="padding: 12px; color: #64748b;">${stats.avg_latency.toFixed(0)}ms</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                `;
+            }
+
+            function renderFallbackChain(fallbacks) {
+                const container = document.getElementById('fallbackChain');
+                if (!fallbacks || fallbacks.length === 0) {
+                    container.innerHTML = '<div style="color: #64748b; text-align: center;">No fallbacks recorded</div>';
+                    return;
+                }
+                
+                container.innerHTML = fallbacks.map((fb, idx) => {
+                    const timestamp = new Date(fb.timestamp * 1000).toLocaleTimeString();
+                    return `
+                        <div style="display: flex; align-items: center; padding: 12px; border-bottom: 1px solid #f1f5f9; gap: 12px;">
+                            <div style="background: #f1f5f9; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #64748b; min-width: 80px; text-align: center;">
+                                ${timestamp}
+                            </div>
+                            <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                                <span style="background: #fee2e2; color: #dc2626; padding: 4px 12px; border-radius: 4px; font-family: monospace; font-size: 12px;">
+                                    ${fb.primary_id}
+                                </span>
+                                <span style="color: #64748b; font-size: 18px;">→</span>
+                                <span style="background: #dcfce7; color: #16a34a; padding: 4px 12px; border-radius: 4px; font-family: monospace; font-size: 12px;">
+                                    ${fb.backup_id}
+                                </span>
+                            </div>
+                            <div style="background: #fef3c7; color: #d97706; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;">
+                                FALLBACK
+                            </div>
+                        </div>
+                    `;
+                }).join('');
             }
 
             async function stopAllModels() {
@@ -1283,6 +1408,47 @@ async def get_dashboard_metrics(db: Session = Depends(get_dbsession)):
     fallback_counts = stats.get('fallback_counts', {})
     total_fallbacks = sum(fallback_counts.values())
     
+    # Calculate judge success rate
+    judge_calls = [m for m in recent_metrics if m.get('type') == 'judge_latency']
+    judge_success = [m for m in judge_calls if m.get('status') == 'success']
+    judge_success_rate = (len(judge_success) / len(judge_calls) * 100) if judge_calls else 0
+    judge_call_count = len(judge_calls)
+    
+    # Calculate judge skip rate
+    judge_skips = [m for m in recent_metrics if m.get('type') == 'judge_skip']
+    total_judge_opportunities = len(judge_calls) + len(judge_skips)
+    judge_skip_rate = (len(judge_skips) / total_judge_opportunities * 100) if total_judge_opportunities else 0
+    
+    # Build per-judge breakdown
+    judge_breakdown = {}
+    for m in judge_calls:
+        judge_id = m.get('judge_id', 'unknown')
+        if judge_id not in judge_breakdown:
+            judge_breakdown[judge_id] = {'calls': 0, 'success': 0, 'failures': 0, 'latencies': []}
+        judge_breakdown[judge_id]['calls'] += 1
+        if m.get('status') == 'success':
+            judge_breakdown[judge_id]['success'] += 1
+            judge_breakdown[judge_id]['latencies'].append(m.get('latency_ms', 0))
+        else:
+            judge_breakdown[judge_id]['failures'] += 1
+    
+    # Calculate avg latency per judge
+    for judge_id in judge_breakdown:
+        latencies = judge_breakdown[judge_id]['latencies']
+        judge_breakdown[judge_id]['avg_latency'] = round(sum(latencies) / len(latencies), 2) if latencies else 0
+        del judge_breakdown[judge_id]['latencies']  # Remove temp array
+    
+    # Get last 20 fallback events
+    judge_fallbacks = [m for m in recent_metrics if m.get('type') == 'judge_fallback']
+    fallback_chain = []
+    for fb in judge_fallbacks[-20:]:
+        fallback_chain.append({
+            'timestamp': fb.get('timestamp', ''),
+            'primary_id': fb.get('primary_id', 'unknown'),
+            'backup_id': fb.get('backup_id', 'unknown')
+        })
+    judge_fallback_count = len(judge_fallbacks)
+    
     return JSONResponse({
         "total_fallbacks": total_fallbacks,
         "judge_latency": stats.get('judge_latency', {}),
@@ -1293,7 +1459,13 @@ async def get_dashboard_metrics(db: Session = Depends(get_dbsession)):
             "judge": judge_latencies,
             "weak": weak_latencies,
             "strong": strong_latencies
-        }
+        },
+        "judge_success_rate": round(judge_success_rate, 1),
+        "judge_skip_rate": round(judge_skip_rate, 1),
+        "judge_call_count": judge_call_count,
+        "judge_fallback_count": judge_fallback_count,
+        "judge_breakdown": judge_breakdown,
+        "fallback_chain": fallback_chain
     })
 
 
