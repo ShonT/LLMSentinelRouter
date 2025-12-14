@@ -19,7 +19,7 @@ import json
 
 from .metrics import get_metrics_collector
 from .state_manager import get_state_manager
-from .config import get_unified_config, settings
+from .config import get_unified_config, get_settings
 from .throttle_manager import get_throttle_manager
 from .router_logic import Router
 from .database import get_db
@@ -1301,6 +1301,7 @@ async def get_dashboard_metrics(db: Session = Depends(get_dbsession)):
 async def get_configuration():
     """Get configuration data for Tab 2."""
     config = get_unified_config()
+    settings = get_settings()
     # Extract API keys from environment (masked)
     api_keys = {
         "DEEPSEEK_API_KEY": settings.deepseek_api_key,

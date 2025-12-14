@@ -341,6 +341,58 @@ class StateManager:
             logger.debug("Updated routing order config")
             return True
 
+    async def get_session_defaults(self) -> Dict[str, Any]:
+        """Return the current session defaults configuration."""
+        session_defaults = self.config.system_settings.session_defaults
+        return session_defaults.model_dump()
+
+    async def update_session_defaults(self, **updates) -> bool:
+        """Update session defaults configuration."""
+        async with self.lock:
+            current_defaults = self.config.system_settings.session_defaults
+            defaults_dict = current_defaults.model_dump()
+            
+            # Apply updates
+            for key, value in updates.items():
+                if key in defaults_dict:
+                    defaults_dict[key] = value
+                else:
+                    logger.warning(f"Ignoring unknown field {key} for session defaults")
+            
+            # Import SessionDefaults here to avoid circular import
+            from ..schemas.config_models import SessionDefaults
+            new_session_defaults = SessionDefaults(**defaults_dict)
+            
+            # Update system settings with new session defaults
+            system_dict = self.config.system_settings.model_dump()
+            system_dict['session_defaults'] = new_session_defaults.model_dump()
+            
+            from ..schemas.config_models import SystemSettings
+            new_system_settings = SystemSettings(**system_dict)
+            self.config.system_settings = new_system_settings
+            
+            self.dirty.add("__config__")
+            logger.info(f"Updated session defaults: {updates}")
+            return True
+
+    async def regenerate_session_id(self) -> str:
+        """Generate a new default session ID based on the current strategy."""
+        async with self.lock:
+            current_defaults = self.config.system_settings.session_defaults
+            new_id = current_defaults.regenerate_session_id()
+            
+            # Update system settings with regenerated ID
+            system_dict = self.config.system_settings.model_dump()
+            system_dict['session_defaults']['default_session_id'] = new_id
+            
+            from ..schemas.config_models import SystemSettings
+            new_system_settings = SystemSettings(**system_dict)
+            self.config.system_settings = new_system_settings
+            
+            self.dirty.add("__config__")
+            logger.info(f"Regenerated session ID: {new_id}")
+            return new_id
+
 
 # Global instance
 _state_manager: Optional[StateManager] = None

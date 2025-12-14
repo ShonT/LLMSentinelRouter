@@ -2,7 +2,13 @@
   "system_settings": {
     "persistence_interval_seconds": 1,
     "default_routing_strategy": "waterfall",
-    "timezone": "UTC"
+    "timezone": "UTC",
+    "session_defaults": {
+      "default_session_id": "default-uuid-001",
+      "default_tier": "free",
+      "default_use_judge": null,
+      "session_id_strategy": "uuid"
+    }
   },
   "models": {
     "test-model-1": {

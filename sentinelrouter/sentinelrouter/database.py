@@ -9,6 +9,8 @@ from sqlalchemy.orm import sessionmaker, Session as SQLAlchemySession
 
 from .config import get_settings
 
+logger = logging.getLogger(__name__)
+
 # Lazy initialization of engine to avoid validation errors during imports
 def get_engine():
     """Return the database engine, initializing if necessary."""
@@ -29,7 +31,9 @@ def init_db() -> None:
     """
     Initialize the database by creating all tables.
     """
+    from .models import Base
     logger.info("Initializing database...")
+    engine = get_engine()
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables created.")
 
@@ -38,7 +42,9 @@ def drop_db() -> None:
     """
     Drop all tables (for testing).
     """
+    from .models import Base
     logger.warning("Dropping all database tables!")
+    engine = get_engine()
     Base.metadata.drop_all(bind=engine)
     logger.info("All tables dropped.")
 

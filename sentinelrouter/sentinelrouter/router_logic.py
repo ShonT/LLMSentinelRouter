@@ -86,6 +86,7 @@ class Router:
         request_id: Optional[str] = None,
         client_ip: Optional[str] = None,
         use_judge: Optional[bool] = None,
+        tier: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Process a single request through the full routing pipeline.
@@ -540,6 +541,24 @@ class Router:
             impact_scope=impact_scope,
             reason=decision_reason,
         )
+        
+        # Log full request/response to file with tier and use_judge
+        await self.audit.log_request_response(
+            session_id=session_id,
+            request_id=request_id,
+            request={"prompt": prompt, "messages": messages},
+            response={"content": response.content, "model": response.model, "usage": response.usage},
+            routing_decision={
+                "model_used": model_used,
+                "complexity_score": complexity_score,
+                "impact_scope": impact_scope,
+                "reasoning": reasoning,
+                "decision_reason": decision_reason,
+            },
+            cost=response.cost,
+            tier=tier,
+            use_judge=use_judge,
+        )
 
         # 9. Update dynamic threshold with the decision
         self.threshold.add_decision(route_decision == "strong")
@@ -600,6 +619,8 @@ class Router:
             "session_cost": session_cost,
             "cycle_detected": cycle_detected,
             "decision_reason": decision_reason,
+            "tier": tier,
+            "use_judge": use_judge,
         }
 
     def _decide_route(
@@ -731,7 +752,7 @@ async def route_request(
         # Ensure session exists with correct tier before routing
         if tier:
             router.budget.get_or_create_session(session_id, client_ip=client_ip, tier=tier)
-        result = await router.route(session_id, prompt, messages, request_id, client_ip, use_judge)
+        result = await router.route(session_id, prompt, messages, request_id, client_ip, use_judge, tier)
         return result
 
 

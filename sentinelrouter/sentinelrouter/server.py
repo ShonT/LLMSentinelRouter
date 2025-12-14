@@ -18,6 +18,7 @@ from .logging_audit import setup_logging
 from .config import get_settings
 from .budget import BudgetKillSwitch
 from .models import Session as SessionModel, RoutingDecision
+from .state_manager import get_state_manager
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -34,17 +35,16 @@ app = FastAPI(
 # CORS middleware - configurable via CORS_ORIGINS env var
 # Set CORS_ORIGINS="https://example.com,https://app.example.com" for production
 # or CORS_ORIGINS="*" for development (default)
-# CORS will be configured on startup event
-def configure_cors():
-    settings = get_settings()
-    cors_origins = settings.cors_origins.split(",") if settings.cors_origins != "*" else ["*"]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# Configure CORS before app starts
+settings = get_settings()
+cors_origins = settings.cors_origins.split(",") if settings.cors_origins != "*" else ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ============================================================================
 # Middleware
@@ -137,7 +137,6 @@ class ErrorResponse(BaseModel):
 async def startup_event():
     """Initialize database and other resources on startup."""
     logger.info("Starting SentinelRouter server...")
-    configure_cors()
     init_db()
     logger.info("Database initialized.")
 
@@ -262,16 +261,35 @@ async def chat_completions(request: ChatCompletionRequest, fastapi_request: Requ
     """
     OpenAI‑compatible chat completions endpoint.
     """
-    # Extract session ID from header or request body
+    # Get session defaults from StateManager
+    state_mgr = await get_state_manager()
+    session_defaults = await state_mgr.get_session_defaults()
+    
+    # Apply session defaults with priority: request > config > hardcoded
     session_id = request.session_id or fastapi_request.headers.get("X-Session-ID")
     if not session_id:
-        # Generate a session ID based on client IP (simple approach)
-        client_ip = fastapi_request.client.host
-        # Use deterministic session ID based on IP (can be overridden by X-Session-ID header)
-        import hashlib
-        ip_hash = hashlib.sha256(client_ip.encode()).hexdigest()[:8]
-        session_id = f"ip_{client_ip}_{ip_hash}"
-        logger.info(f"No session ID provided, generated deterministic ID: {session_id}")
+        # Use session_id_strategy from config
+        strategy = session_defaults.get("session_id_strategy", "uuid")
+        if strategy == "ip_based":
+            client_ip = fastapi_request.client.host
+            import hashlib
+            ip_hash = hashlib.sha256(client_ip.encode()).hexdigest()[:8]
+            session_id = f"ip_{client_ip}_{ip_hash}"
+            logger.info(f"Generated IP-based session ID: {session_id}")
+        else:
+            # Use default_session_id from config or generate UUID
+            session_id = session_defaults.get("default_session_id")
+            if not session_id or strategy == "uuid":
+                session_id = str(uuid.uuid4())
+            logger.info(f"Using session ID: {session_id}")
+
+    # Apply tier default (request > config > hardcoded "free")
+    tier = request.tier if request.tier is not None else session_defaults.get("default_tier", "free")
+    
+    # Apply use_judge default (request > config > hardcoded None)
+    use_judge = request.use_judge if request.use_judge is not None else session_defaults.get("default_use_judge")
+    
+    logger.info(f"Request params: session_id={session_id}, tier={tier}, use_judge={use_judge}")
 
     # Convert messages to list of dicts for router
     messages = [msg.dict() for msg in request.messages]
@@ -290,8 +308,8 @@ async def chat_completions(request: ChatCompletionRequest, fastapi_request: Requ
             messages=messages,
             request_id=str(uuid.uuid4()),
             client_ip=fastapi_request.client.host,
-            tier=request.tier,
-            use_judge=request.use_judge,
+            tier=tier,
+            use_judge=use_judge,
         )
     except ValueError as e:
         # Budget exceeded or other business logic error
@@ -339,6 +357,69 @@ async def chat_completions(request: ChatCompletionRequest, fastapi_request: Requ
         "X-Sentinel-Session-ID": session_id,
     }
     return JSONResponse(content=response_obj.dict(), headers=headers)
+
+# ============================================================================
+# Session Defaults Management API (for Dashboard)
+# ============================================================================
+
+@app.get("/api/dashboard/session-defaults")
+async def get_session_defaults():
+    """Get current session defaults configuration."""
+    try:
+        state_mgr = await get_state_manager()
+        session_defaults = await state_mgr.get_session_defaults()
+        return JSONResponse(content={"success": True, "data": session_defaults})
+    except Exception as e:
+        logger.exception("Error getting session defaults")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@app.post("/api/dashboard/session-defaults")
+async def update_session_defaults(updates: dict):
+    """Update session defaults configuration."""
+    try:
+        state_mgr = await get_state_manager()
+        success = await state_mgr.update_session_defaults(**updates)
+        if success:
+            session_defaults = await state_mgr.get_session_defaults()
+            logger.info(f"Session defaults updated: {updates}")
+            return JSONResponse(content={
+                "success": True, 
+                "message": "Session defaults updated successfully",
+                "data": session_defaults
+            })
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "Failed to update session defaults"}
+            )
+    except Exception as e:
+        logger.exception("Error updating session defaults")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@app.post("/api/dashboard/regenerate-session-id")
+async def regenerate_session_id():
+    """Regenerate the default session ID based on current strategy."""
+    try:
+        state_mgr = await get_state_manager()
+        new_id = await state_mgr.regenerate_session_id()
+        logger.info(f"Session ID regenerated: {new_id}")
+        return JSONResponse(content={
+            "success": True, 
+            "message": "Session ID regenerated successfully",
+            "data": {"default_session_id": new_id}
+        })
+    except Exception as e:
+        logger.exception("Error regenerating session ID")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
 
 # ============================================================================
 # Error handlers

@@ -5,12 +5,30 @@ Pydantic models for the unified configuration schema.
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Dict, List, Literal, Optional, Union
 from datetime import datetime
+import uuid
+
+
+class SessionDefaults(BaseModel):
+    """Default session configuration"""
+    default_session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    default_tier: Literal["free", "paid"] = "free"
+    default_use_judge: Optional[bool] = None  # None = smart mode, True = always, False = never
+    session_id_strategy: Literal["uuid", "ip_based", "custom"] = "uuid"
+    
+    def regenerate_session_id(self) -> str:
+        """Generate a new session ID based on strategy"""
+        if self.session_id_strategy == "uuid":
+            new_id = str(uuid.uuid4())
+            self.default_session_id = new_id
+            return new_id
+        return self.default_session_id
 
 
 class SystemSettings(BaseModel):
     persistence_interval_seconds: int = Field(default=5, gt=0)
     default_routing_strategy: Literal["waterfall", "priority"] = "waterfall"
     timezone: str = "UTC"
+    session_defaults: SessionDefaults = Field(default_factory=SessionDefaults)
 
 
 class ModelCapabilities(BaseModel):

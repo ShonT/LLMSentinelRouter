@@ -196,6 +196,8 @@ class RequestResponseLogger:
         cost: float,
         start_time: datetime,
         end_time: datetime,
+        tier: Optional[str] = None,
+        use_judge: Optional[bool] = None,
     ) -> None:
         """
         Log a request/response pair to a JSON file.
@@ -210,6 +212,8 @@ class RequestResponseLogger:
             "request_id": request_id,
             "timestamp_start": start_time.isoformat(),
             "timestamp_end": end_time.isoformat(),
+            "tier": tier,
+            "use_judge": use_judge,
             "request": request,
             "response": response,
             "routing_decision": routing_decision,
@@ -249,6 +253,8 @@ class LoggingAudit:
         cost: float,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
+        tier: Optional[str] = None,
+        use_judge: Optional[bool] = None,
     ) -> None:
         """
         Log a request/response to both database and file.
@@ -280,6 +286,8 @@ class LoggingAudit:
                 cost=cost,
                 start_time=start_time,
                 end_time=end_time,
+                tier=tier,
+                use_judge=use_judge,
             )
 
     def log_routing_decision(
