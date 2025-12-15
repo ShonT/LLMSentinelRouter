@@ -262,7 +262,7 @@ class StateManager:
 
 ### Model Selection Update
 
-The [`Router.route()`](../../sentinelrouter/sentinelrouter/router_logic.py:76) method needs to:
+The [`Router.route()`](../../sentinelrouter/sentinelrouter/router_logic.py) method needs to:
 
 1. Check model `status` for `banned` and `status_valid_till`
 2. Use `routing_order.strong_models` and `routing_order.weak_models` for ordering
