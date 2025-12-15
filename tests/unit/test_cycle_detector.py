@@ -103,7 +103,7 @@ class TestCycleDetector:
     
     def test_detect_cycle_exact_duplicate(self):
         """Test cycle detection with exact duplicate."""
-        detector = CycleDetector(session_id="test_session", simhash_threshold=3)
+        detector = CycleDetector(session_id="test_session", simhash_threshold=3, repetition_threshold=1)
         
         prompt = "What is the capital of France?"
         
@@ -236,7 +236,7 @@ class TestCycleDetector:
     
     def test_special_characters(self):
         """Test handling of special characters."""
-        detector = CycleDetector(session_id="test_session")
+        detector = CycleDetector(session_id="test_session", repetition_threshold=1)
         
         prompt = "What is 2+2? Answer: 4!"
         
@@ -247,18 +247,18 @@ class TestCycleDetector:
     
     def test_unicode_handling(self):
         """Test handling of unicode characters."""
-        detector = CycleDetector(session_id="test_session")
+        detector = CycleDetector(session_id="test_session", repetition_threshold=1)
         
-        prompt = "¿Cuál es la capital de Francia? 法国的首都是什么？"
+        prompt = "¿Cuál es la capital de Francia? 中国的首都是什么？"
         
-        detector.add_request_response(prompt, "París / 巴黎")
+        detector.add_request_response(prompt, "París / 北京")
         cycle = detector.detect_cycle_with_prompt(prompt)
         
         assert cycle is True
     
     def test_very_long_text(self):
         """Test handling of very long text."""
-        detector = CycleDetector(session_id="test_session")
+        detector = CycleDetector(session_id="test_session", repetition_threshold=1)
         
         long_prompt = "What is the meaning of life? " * 1000
         long_response = "42 " * 500

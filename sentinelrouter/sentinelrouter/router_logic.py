@@ -644,6 +644,16 @@ class Router:
             response.usage.get("total_tokens", 0) if hasattr(response, "usage") and response.usage else 0
         )
         
+        # Record overall request latency for successful requests
+        if response and hasattr(response, 'content') and response.content:
+            metrics.record_event("overall_request_latency", {
+                "session_id": session_id,
+                "request_id": request_id,
+                "model_used": model_used,
+                "tier": tier,
+                "latency_ms": total_latency_ms,
+            })
+        
         if cycle_detected:
             logger.info(
                 f"Skipping semantic cache recording for cycle-detected request "

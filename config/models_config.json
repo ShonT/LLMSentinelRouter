@@ -237,10 +237,13 @@
   },
   "routing_order_config": {
     "strong_models": [
-      "claude-opus-4"
+      "claude-opus-4",
+      "deepseek-chat",
+      "gemini-2.5-flash-lite-primary"
     ],
     "weak_models": [
-      "deepseek-chat"
+      "deepseek-chat",
+      "gemini-2.5-flash-lite-primary"
     ]
   }
 }

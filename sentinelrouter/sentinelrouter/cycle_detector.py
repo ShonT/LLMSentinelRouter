@@ -32,10 +32,11 @@ class CycleDetector:
         - Implement pruning of old nodes (keep last 100 interactions)
     """
 
-    def __init__(self, session_id: str, window_size: int = 100, simhash_threshold: int = 8, repetition_threshold: int = 4):
+    def __init__(self, session_id: str, window_size: int = None, simhash_threshold: int = None, repetition_threshold: int = 4):
+        settings = get_settings()
         self.session_id = session_id
-        self.window_size = window_size          # keep last N interactions
-        self.simhash_threshold = simhash_threshold  # distance < 8 means cycle (increased from 3 to reduce false positives)
+        self.window_size = window_size if window_size is not None else settings.cycle_detection_window_size
+        self.simhash_threshold = simhash_threshold if simhash_threshold is not None else settings.cycle_detection_simhash_threshold
         self.repetition_threshold = repetition_threshold  # Only escalate after N repetitions
 
         if nx is None:
@@ -110,30 +111,47 @@ class CycleDetector:
         
         Only escalates if the prompt has been repeated >= repetition_threshold times.
         Only considers prompts from successful requests (tracked via add_request_response).
+        
+        Enhanced with two filters:
+        1. Only checks last 10 prompts (not entire window of 100)
+        2. Only counts prompts from last 15 minutes
 
         Returns True if a cycle is detected (4+ repetitions), False otherwise.
         """
         # Compute hash of just the prompt (not combined with old response)
         prompt_hash = compute_simhash(prompt)
         
-        # Count how many times this prompt (or similar prompts) appear in successful history
+        # Get current timestamp for time-based filtering
+        current_time = datetime.utcnow()
+        time_window = timedelta(minutes=15)  # Only consider prompts from last 15 minutes
+        recent_prompt_limit = 10  # Only check last 10 prompts
+        
+        # Get recent prompts (last 10) within time window (last 15 minutes)
+        recent_prompts = [
+            (ph, ts) for ph, ts in self.successful_prompts[-recent_prompt_limit:]
+            if (current_time - ts) <= time_window
+        ]
+        
+        # Count how many times this prompt (or similar prompts) appear in recent history
         repetition_count = 0
-        for existing_prompt_hash, _ in self.successful_prompts:
+        for existing_prompt_hash, ts in recent_prompts:
             dist = hamming_distance(prompt_hash, existing_prompt_hash)
             if dist < self.simhash_threshold:
                 repetition_count += 1
         
-        # Only escalate if we've seen this prompt 4+ times in successful responses
+        # Only escalate if we've seen this prompt 4+ times in recent history
         if repetition_count >= self.repetition_threshold:
             logger.warning(
                 f"Cycle detected for session {self.session_id}: "
-                f"prompt repeated {repetition_count} times (threshold={self.repetition_threshold})"
+                f"prompt repeated {repetition_count} times in last {len(recent_prompts)} prompts "
+                f"(within 15 min window, threshold={self.repetition_threshold})"
             )
             return True
         
         logger.debug(
             f"Prompt similarity check for session {self.session_id}: "
-            f"{repetition_count} repetitions (threshold={self.repetition_threshold}, no escalation)"
+            f"{repetition_count} repetitions in last {len(recent_prompts)} prompts "
+            f"(threshold={self.repetition_threshold}, no escalation)"
         )
         return False
 

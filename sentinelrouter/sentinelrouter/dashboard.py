@@ -570,7 +570,7 @@ async def dashboard_home():
 
                 <!-- Latency Line Charts -->
                 <div class="chart-container">
-                    <div class="chart-title">📈 Latency Trends (Last 50 Requests)</div>
+                    <div class="chart-title">📈 Latency Trends (Last 4 Hours)</div>
                     <canvas id="latencyChart" style="max-height: 300px;"></canvas>
                 </div>
 
@@ -809,48 +809,79 @@ async def dashboard_home():
                     latencyChart.destroy();
                 }
                 
-                const labels = series?.labels || Array.from({length: 50}, (_, i) => i + 1);
-                const judgeData = series?.judge || [];
-                const weakData = series?.weak || [];
-                const strongData = series?.strong || [];
+                const labels = series?.labels || Array.from({length: 240}, (_, i) => (240 - i - 1).toString());
+                const judgeData = series?.judge_latency || [];
+                const weakData = series?.weak_model_latency || [];
+                const strongData = series?.strong_model_latency || [];
+                const overallData = series?.overall_request_latency || [];
+                
+                // Datasets with interactive legend support
+                const datasets = [
+                    {
+                        label: 'Judge Latency',
+                        data: judgeData,
+                        borderColor: '#f59e0b', // amber
+                        backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                        tension: 0.4,
+                        fill: true,
+                        spanGaps: true,
+                        hidden: false
+                    },
+                    {
+                        label: 'Weak Model Latency',
+                        data: weakData,
+                        borderColor: '#10b981', // green
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        tension: 0.4,
+                        fill: true,
+                        spanGaps: true,
+                        hidden: false
+                    },
+                    {
+                        label: 'Strong Model Latency',
+                        data: strongData,
+                        borderColor: '#ef4444', // red
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        tension: 0.4,
+                        fill: true,
+                        spanGaps: true,
+                        hidden: false
+                    },
+                    {
+                        label: 'Overall Request Latency',
+                        data: overallData,
+                        borderColor: '#3b82f6', // blue
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        tension: 0.4,
+                        fill: true,
+                        spanGaps: true,
+                        hidden: false
+                    }
+                ];
                 
                 latencyChart = new Chart(ctx, {
                     type: 'line',
                     data: {
                         labels: labels,
-                        datasets: [
-                            {
-                                label: 'Judge Latency',
-                                data: judgeData,
-                                borderColor: '#f59e0b',
-                                backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                                tension: 0.4,
-                                fill: true
-                            },
-                            {
-                                label: 'Weak Model Latency',
-                                data: weakData,
-                                borderColor: '#10b981',
-                                backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                                tension: 0.4,
-                                fill: true
-                            },
-                            {
-                                label: 'Strong Model Latency',
-                                data: strongData,
-                                borderColor: '#ef4444',
-                                backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                                tension: 0.4,
-                                fill: true
-                            }
-                        ]
+                        datasets: datasets
                     },
                     options: {
                         responsive: true,
                         maintainAspectRatio: true,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
                         plugins: {
                             legend: {
                                 position: 'top',
+                                onClick: function (e, legendItem, legend) {
+                                    const index = legendItem.datasetIndex;
+                                    const ci = this.chart;
+                                    const meta = ci.getDatasetMeta(index);
+                                    meta.hidden = meta.hidden === null ? !ci.data.datasets[index].hidden : null;
+                                    ci.update();
+                                }
                             },
                             tooltip: {
                                 mode: 'index',
@@ -868,8 +899,9 @@ async def dashboard_home():
                             x: {
                                 title: {
                                     display: true,
-                                    text: 'Request Number'
-                                }
+                                    text: 'Minutes Ago'
+                                },
+                                reverse: true // Shows 240 (oldest) on left, 0 (most recent) on right
                             }
                         }
                     }
@@ -1365,57 +1397,52 @@ async def get_dashboard_metrics(db: Session = Depends(get_dbsession)):
     collector = get_metrics_collector()
     stats = collector.get_aggregated_stats()
     
-    # Get recent metrics for latency time series
-    recent_metrics = collector.get_recent_metrics(limit=50)
+    # Get all metrics (not just 50) to cover the 4-hour window
+    # Use a large limit to ensure we capture enough metrics for 4 hours
+    # In practice, we need metrics from the last 240 minutes (4 hours)
+    # Assuming average request rate, we'll get up to 10,000 metrics
+    all_metrics = collector.get_recent_metrics(limit=10000)
     
-    # Build latency series from recent metrics
-    judge_latencies = []
-    weak_latencies = []
-    strong_latencies = []
-    labels = []
-    
-    # Extract latency data points from metrics
-    for i, metric in enumerate(recent_metrics):
+    # Filter for successful latency events only (status != 'error')
+    # and only include the four latency metric types
+    latency_metrics = []
+    for metric in all_metrics:
         metric_type = metric.get('type', '')
-        latency = metric.get('latency_ms')
-        
-        # Only include latency metrics
-        if 'latency' in metric_type and latency is not None:
-            labels.append(str(i + 1))
-            
-            if metric_type == 'judge_latency':
-                judge_latencies.append(latency)
-                weak_latencies.append(None)
-                strong_latencies.append(None)
-            elif metric_type == 'weak_model_latency':
-                judge_latencies.append(None)
-                weak_latencies.append(latency)
-                strong_latencies.append(None)
-            elif metric_type == 'strong_model_latency':
-                judge_latencies.append(None)
-                weak_latencies.append(None)
-                strong_latencies.append(latency)
+        # Check if it's one of the four latency types
+        if metric_type in ('judge_latency', 'weak_model_latency',
+                          'strong_model_latency', 'overall_request_latency'):
+            # Filter for successful events
+            if metric.get('status') != 'error':
+                latency_metrics.append(metric)
     
-    # Pad to 50 points if needed
-    while len(labels) < 50:
-        idx = len(labels)
-        labels.append(str(idx + 1))
-        judge_latencies.append(None)
-        weak_latencies.append(None)
-        strong_latencies.append(None)
+    # Aggregate metrics by minute using the utility function
+    aggregated = aggregate_metrics_by_minute(latency_metrics, window_minutes=240)
+    
+    # Prepare line chart data for frontend
+    chart_data = prepare_line_chart_data(aggregated, window_minutes=240)
+    
+    # Build latency series structure for frontend
+    latency_series = {
+        "labels": chart_data["labels"],
+        "judge_latency": chart_data["judge_latency"],
+        "weak_model_latency": chart_data["weak_model_latency"],
+        "strong_model_latency": chart_data["strong_model_latency"],
+        "overall_request_latency": chart_data["overall_request_latency"]
+    }
     
     # Count fallbacks - sum all fallback types
     fallback_counts = stats.get('fallback_counts', {})
     total_fallbacks = sum(fallback_counts.values())
     
-    # Calculate judge success rate
-    judge_calls = [m for m in recent_metrics if m.get('type') == 'judge_latency']
+    # Calculate judge success rate (using all judge latency metrics, not just successful ones)
+    # We need judge calls from all metrics, not just filtered
+    judge_calls = [m for m in all_metrics if m.get('type') == 'judge_latency']
     judge_success = [m for m in judge_calls if m.get('status') == 'success']
     judge_success_rate = (len(judge_success) / len(judge_calls) * 100) if judge_calls else 0
     judge_call_count = len(judge_calls)
     
     # Calculate judge skip rate
-    judge_skips = [m for m in recent_metrics if m.get('type') == 'judge_skip']
+    judge_skips = [m for m in all_metrics if m.get('type') == 'judge_skip']
     total_judge_opportunities = len(judge_calls) + len(judge_skips)
     judge_skip_rate = (len(judge_skips) / total_judge_opportunities * 100) if total_judge_opportunities else 0
     
@@ -1439,7 +1466,7 @@ async def get_dashboard_metrics(db: Session = Depends(get_dbsession)):
         del judge_breakdown[judge_id]['latencies']  # Remove temp array
     
     # Get last 20 fallback events
-    judge_fallbacks = [m for m in recent_metrics if m.get('type') == 'judge_fallback']
+    judge_fallbacks = [m for m in all_metrics if m.get('type') == 'judge_fallback']
     fallback_chain = []
     for fb in judge_fallbacks[-20:]:
         fallback_chain.append({
@@ -1454,12 +1481,7 @@ async def get_dashboard_metrics(db: Session = Depends(get_dbsession)):
         "judge_latency": stats.get('judge_latency', {}),
         "weak_model_latency": stats.get('weak_model_latency', {}),
         "strong_model_latency": stats.get('strong_model_latency', {}),
-        "latency_series": {
-            "labels": labels,
-            "judge": judge_latencies,
-            "weak": weak_latencies,
-            "strong": strong_latencies
-        },
+        "latency_series": latency_series,
         "judge_success_rate": round(judge_success_rate, 1),
         "judge_skip_rate": round(judge_skip_rate, 1),
         "judge_call_count": judge_call_count,
@@ -1673,6 +1695,149 @@ async def get_full_configuration():
         "judge_config": judge_config.model_dump(),
         "routing_order_config": routing_order_config.model_dump()
     })
+
+
+def aggregate_metrics_by_minute(
+    metrics: List[Dict[str, Any]],
+    window_minutes: int = 240
+) -> Dict[int, Dict[str, float]]:
+    """
+    Aggregate latency metrics by minute offset within a sliding window.
+    
+    Groups metrics into minute buckets (0-239) and computes average latency
+    for four metric types: judge_latency, weak_model_latency,
+    strong_model_latency, and overall_request_latency.
+    
+    Args:
+        metrics: List of metric dicts with 'timestamp', 'type', and 'latency_ms'
+        window_minutes: Size of sliding window in minutes (default 240 for 4 hours)
+    
+    Returns:
+        Dict mapping minute offset (0-239) to dict of metric type -> average latency.
+        Only includes offsets that have data; missing minutes are omitted.
+    """
+    import time
+    current_time = time.time()
+    
+    # Initialize aggregation structure: offset -> metric_type -> (sum, count)
+    aggregation = {
+        offset: {
+            "judge_latency": {"sum": 0.0, "count": 0},
+            "weak_model_latency": {"sum": 0.0, "count": 0},
+            "strong_model_latency": {"sum": 0.0, "count": 0},
+            "overall_request_latency": {"sum": 0.0, "count": 0},
+        }
+        for offset in range(window_minutes)
+    }
+    
+    # Filter to only latency metrics within the window
+    latency_types = {
+        "judge_latency",
+        "weak_model_latency",
+        "strong_model_latency",
+        "overall_request_latency"
+    }
+    
+    for metric in metrics:
+        metric_type = metric.get("type")
+        if metric_type not in latency_types:
+            continue
+        
+        timestamp = metric.get("timestamp")
+        if timestamp is None:
+            continue
+        
+        # Calculate age in seconds
+        age_seconds = current_time - timestamp
+        if age_seconds < 0 or age_seconds > window_minutes * 60:
+            continue  # Outside window
+        
+        # Convert to minute offset (0 = most recent minute, 239 = 239 minutes ago)
+        minute_offset = int(age_seconds / 60)
+        if minute_offset >= window_minutes:
+            minute_offset = window_minutes - 1
+        
+        latency = metric.get("latency_ms")
+        if latency is None:
+            continue
+        
+        # Accumulate
+        bucket = aggregation[minute_offset]
+        if metric_type in bucket:
+            bucket[metric_type]["sum"] += latency
+            bucket[metric_type]["count"] += 1
+    
+    # Convert to averages, removing empty buckets
+    result = {}
+    for offset in range(window_minutes):
+        bucket = aggregation[offset]
+        minute_averages = {}
+        for metric_type in latency_types:
+            data = bucket[metric_type]
+            if data["count"] > 0:
+                minute_averages[metric_type] = data["sum"] / data["count"]
+        
+        if minute_averages:  # Only include minutes with data
+            result[offset] = minute_averages
+    
+    return result
+
+
+def prepare_line_chart_data(
+    aggregated_data: Dict[int, Dict[str, float]],
+    window_minutes: int = 240
+) -> Dict[str, Any]:
+    """
+    Convert minute-aggregated data to Chart.js line chart format.
+    
+    Creates labels from window_minutes to 0 (minutes ago) and four data arrays
+    with None values for missing minutes (to create gaps with spanGaps: true).
+    
+    Args:
+        aggregated_data: Output from aggregate_metrics_by_minute
+        window_minutes: Size of sliding window in minutes (default 240)
+    
+    Returns:
+        Dict with "labels" (list of strings) and four data arrays:
+        - judge_latency
+        - weak_model_latency
+        - strong_model_latency
+        - overall_request_latency
+    """
+    # Initialize arrays with None
+    judge_data = [None] * window_minutes
+    weak_data = [None] * window_minutes
+    strong_data = [None] * window_minutes
+    overall_data = [None] * window_minutes
+    
+    # Fill in data where available
+    for offset, minute_averages in aggregated_data.items():
+        if offset < 0 or offset >= window_minutes:
+            continue
+        
+        # Convert offset to chart index (0 = oldest, 239 = most recent)
+        # We want labels from window_minutes to 0 (minutes ago)
+        chart_index = window_minutes - 1 - offset
+        
+        if "judge_latency" in minute_averages:
+            judge_data[chart_index] = minute_averages["judge_latency"]
+        if "weak_model_latency" in minute_averages:
+            weak_data[chart_index] = minute_averages["weak_model_latency"]
+        if "strong_model_latency" in minute_averages:
+            strong_data[chart_index] = minute_averages["strong_model_latency"]
+        if "overall_request_latency" in minute_averages:
+            overall_data[chart_index] = minute_averages["overall_request_latency"]
+    
+    # Create labels: "240", "239", ..., "1", "0" (minutes ago)
+    labels = [str(window_minutes - i - 1) for i in range(window_minutes)]
+    
+    return {
+        "labels": labels,
+        "judge_latency": judge_data,
+        "weak_model_latency": weak_data,
+        "strong_model_latency": strong_data,
+        "overall_request_latency": overall_data
+    }
 
 
 def start_dashboard_server(host: str = "0.0.0.0", port: int = 8001):
