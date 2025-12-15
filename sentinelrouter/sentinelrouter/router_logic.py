@@ -577,6 +577,8 @@ class Router:
             logger.debug(f"Updated cycle detector with successful response for session {session_id}")
         else:
             logger.warning(f"Skipping cycle detector update - no valid response content for session {session_id}")
+            # Clear last response to prevent stale data from affecting future cycle detection
+            cycle_detector.clear_last_response()
 
         # 7. Update budget with actual cost
         self.budget.add_cost(session_id, response.cost)

@@ -326,9 +326,17 @@ async def chat_completions(request: ChatCompletionRequest, fastapi_request: Requ
         )
     except ValueError as e:
         # Budget exceeded or other business logic error
+        # Clear cycle detector state to prevent false positives on retry
+        from .router_logic import _CYCLE_DETECTORS_CACHE
+        if session_id in _CYCLE_DETECTORS_CACHE:
+            _CYCLE_DETECTORS_CACHE[session_id].clear_last_response()
         raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         logger.exception("Unexpected error during routing")
+        # Clear cycle detector state to prevent false positives on retry
+        from .router_logic import _CYCLE_DETECTORS_CACHE
+        if session_id in _CYCLE_DETECTORS_CACHE:
+            _CYCLE_DETECTORS_CACHE[session_id].clear_last_response()
         raise HTTPException(status_code=500, detail="Internal server error")
 
     # Prepare OpenAI‑style response

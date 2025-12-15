@@ -32,10 +32,11 @@ class CycleDetector:
         - Implement pruning of old nodes (keep last 100 interactions)
     """
 
-    def __init__(self, session_id: str, window_size: int = 100, simhash_threshold: int = 8):
+    def __init__(self, session_id: str, window_size: int = 100, simhash_threshold: int = 8, repetition_threshold: int = 4):
         self.session_id = session_id
         self.window_size = window_size          # keep last N interactions
         self.simhash_threshold = simhash_threshold  # distance < 8 means cycle (increased from 3 to reduce false positives)
+        self.repetition_threshold = repetition_threshold  # Only escalate after N repetitions
 
         if nx is None:
             logger.warning("networkx not installed. Cycle detection will be disabled.")
@@ -45,6 +46,8 @@ class CycleDetector:
 
         # Keep a sliding window of recent hashes for fast lookup
         self.recent_hashes: List[Tuple[int, datetime]] = []
+        # Track only SUCCESSFUL prompts (only added via add_request_response)
+        self.successful_prompts: List[Tuple[int, datetime]] = []  # Track prompt hashes from successful responses
         self.last_hash: Optional[int] = None
         self.last_response: Optional[str] = None
 
@@ -88,6 +91,12 @@ class CycleDetector:
 
         # Store the last response for future cycle detection
         self.last_response = response
+        
+        # Add this prompt to successful prompts history (only on successful completion)
+        prompt_hash = compute_simhash(prompt)
+        self.successful_prompts.append((prompt_hash, ts))
+        if len(self.successful_prompts) > self.window_size:
+            self.successful_prompts.pop(0)
 
         # Prune old nodes (by count, not time) to keep graph size manageable
         self._prune_by_count()
@@ -96,15 +105,37 @@ class CycleDetector:
 
     def detect_cycle_with_prompt(self, prompt: str) -> bool:
         """
-        Detect if the current prompt, combined with the last assistant response,
-        forms a cycle with any previous interaction.
+        Detect if the current prompt is very similar to recent SUCCESSFUL prompts,
+        indicating a potential repetitive cycle.
+        
+        Only escalates if the prompt has been repeated >= repetition_threshold times.
+        Only considers prompts from successful requests (tracked via add_request_response).
 
-        Returns True if a cycle is detected, False otherwise.
+        Returns True if a cycle is detected (4+ repetitions), False otherwise.
         """
-        if self.last_response is None:
-            return False
-        current_hash = self._compute_hash(prompt, self.last_response)
-        return self._detect_cycle(current_hash)
+        # Compute hash of just the prompt (not combined with old response)
+        prompt_hash = compute_simhash(prompt)
+        
+        # Count how many times this prompt (or similar prompts) appear in successful history
+        repetition_count = 0
+        for existing_prompt_hash, _ in self.successful_prompts:
+            dist = hamming_distance(prompt_hash, existing_prompt_hash)
+            if dist < self.simhash_threshold:
+                repetition_count += 1
+        
+        # Only escalate if we've seen this prompt 4+ times in successful responses
+        if repetition_count >= self.repetition_threshold:
+            logger.warning(
+                f"Cycle detected for session {self.session_id}: "
+                f"prompt repeated {repetition_count} times (threshold={self.repetition_threshold})"
+            )
+            return True
+        
+        logger.debug(
+            f"Prompt similarity check for session {self.session_id}: "
+            f"{repetition_count} repetitions (threshold={self.repetition_threshold}, no escalation)"
+        )
+        return False
 
     def _detect_cycle(self, current_hash: int) -> bool:
         """
@@ -187,6 +218,13 @@ class CycleDetector:
         if self.graph is not None:
             self.graph.clear()
         self.recent_hashes.clear()
+        self.successful_prompts.clear()
         self.last_hash = None
         self.last_response = None
         logger.info(f"Cycle detector reset for session {self.session_id}")
+    
+    def clear_last_response(self):
+        """Clear the last response without resetting the entire detector.
+        Used when a request fails to prevent stale response data."""
+        self.last_response = None
+        logger.debug(f"Cleared last_response for session {self.session_id}")

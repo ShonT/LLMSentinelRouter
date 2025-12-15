@@ -1485,12 +1485,12 @@ async def get_configuration():
     for model_id, model_config in config.models.items():
         models.append({
             "id": model_id,
-            "config": model_config.dict()
+            "config": model_config.model_dump(mode='json')
         })
     return JSONResponse({
         "api_keys": api_keys,
         "models": models,
-        "system_settings": config.system_settings.dict()
+        "system_settings": config.system_settings.model_dump(mode='json')
     })
 
 

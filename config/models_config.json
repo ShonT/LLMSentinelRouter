@@ -19,7 +19,9 @@
       "status": "ACTIVE",
       "status_valid_till": null,
       "capabilities": {
-        "modality": ["text"],
+        "modality": [
+          "text"
+        ],
         "context_window": 64000
       },
       "routing": {
@@ -56,10 +58,10 @@
       },
       "state": {
         "current_rpm": 0.0,
-        "requests_today": 0,
-        "tokens_today": 0,
-        "total_cost_session": 0.0,
-        "last_updated_ts": null,
+        "requests_today": 1,
+        "tokens_today": 91,
+        "total_cost_session": 2.4220000000000005e-05,
+        "last_updated_ts": "2025-12-14 11:38:38.867320",
         "exhausted_until_ts": null
       }
     },
@@ -71,7 +73,9 @@
       "status": "ACTIVE",
       "status_valid_till": null,
       "capabilities": {
-        "modality": ["text"],
+        "modality": [
+          "text"
+        ],
         "context_window": 200000
       },
       "routing": {
@@ -123,7 +127,9 @@
       "status": "ACTIVE",
       "status_valid_till": null,
       "capabilities": {
-        "modality": ["text"],
+        "modality": [
+          "text"
+        ],
         "context_window": 32000
       },
       "routing": {
@@ -175,7 +181,9 @@
       "status": "ACTIVE",
       "status_valid_till": null,
       "capabilities": {
-        "modality": ["text"],
+        "modality": [
+          "text"
+        ],
         "context_window": 64000
       },
       "routing": {

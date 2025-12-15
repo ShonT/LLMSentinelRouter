@@ -393,6 +393,6 @@ Potential future improvements:
 
 ## See Also
 
-- [ISSUE_Judge_Mode_Optimization.md](./.github/ISSUE_Judge_Mode_Optimization.md)
-- [Router Architecture](./sentinelrouter_design.md)
-- [Metrics Documentation](./METRICS_IMPLEMENTATION.md)
+- [Judge Mode Optimization Issue](../../.github/resolved/RESOLVED_Judge_Mode_Optimization.md)
+- [Router Architecture Overview](overview.md)
+- [Metrics Documentation](../operations/monitoring.md)

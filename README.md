@@ -4,8 +4,8 @@
 
 SentinelRouter is a Python‑based local API gateway that sits between an autonomous agent (client) and LLM providers. Its primary purpose is to enforce strict budget control and intelligent routing between a weak model (DeepSeek) and a strong model (Anthropic Claude) based on request complexity, cumulative cost, and session‑based limits.
 
-> **✅ Code Review & Fixes Applied (December 2025)**  
-> All critical issues identified in the comprehensive code review have been fixed. See [ISSUES.md](ISSUES.md) for details on resolved bugs, security improvements, and performance enhancements.
+> **✅ Code Review & Fixes Applied (December 2025)**
+> All critical issues identified in the comprehensive code review have been fixed. See [documentation/operations/issues.md](documentation/operations/issues.md) for details on resolved bugs, security improvements, and performance enhancements.
 
 ## Features
 
