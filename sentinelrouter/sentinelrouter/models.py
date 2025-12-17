@@ -44,6 +44,7 @@ class Session(Base):
     routing_decisions = relationship("RoutingDecision", back_populates="session")
     cycle_nodes = relationship("CycleNode", back_populates="session")
     escalation_logs = relationship("EscalationLog", back_populates="session")
+    escalation_traces = relationship("EscalationTrace", back_populates="session")
 
 
 class RoutingDecision(Base):
@@ -62,6 +63,16 @@ class RoutingDecision(Base):
     prompt_hash = Column(String)
     impact_scope = Column(String, nullable=True)
     reason = Column(Text, nullable=True)
+
+    # NEW: Token tracking
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    total_tokens = Column(Integer, default=0)
+
+    # NEW: Latency tracking
+    request_latency_ms = Column(Float, default=0.0)  # Total end-to-end time
+    model_latency_ms = Column(Float, default=0.0)    # Time in LLM API call
+    judge_latency_ms = Column(Float, nullable=True)  # Judge invocation time (if used)
 
     # Relationships
     session = relationship("Session", back_populates="routing_decisions")
@@ -99,6 +110,51 @@ class EscalationLog(Base):
 
     # Relationships
     session = relationship("Session", back_populates="escalation_logs")
+
+
+class EscalationTrace(Base):
+    """
+    Detailed trace of strong model escalations showing full decision path.
+    """
+    __tablename__ = "escalation_traces"
+
+    trace_id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String, ForeignKey("sessions.session_id"))
+    request_id = Column(String, unique=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+    # Request info
+    request_preview = Column(Text, nullable=True)
+
+    # Cycle detection trace
+    cycle_detected = Column(Boolean, default=False)
+    cycle_hash_distance = Column(Float, nullable=True)
+    cycle_repetition_count = Column(Integer, nullable=True)
+
+    # Semantic cache trace
+    cache_hit = Column(Boolean, default=False)
+    cache_confidence = Column(Float, nullable=True)
+    cache_recommendation = Column(String, nullable=True)  # 'weak', 'strong', or NULL
+    cache_weak_calls = Column(Integer, default=0)
+    cache_strong_calls = Column(Integer, default=0)
+
+    # Judge trace
+    judge_invoked = Column(Boolean, default=False)
+    judge_complexity_score = Column(Float, nullable=True)
+    judge_impact_scope = Column(String, nullable=True)
+    judge_reasoning = Column(Text, nullable=True)
+    judge_latency_ms = Column(Float, nullable=True)
+
+    # Routing decision trace
+    initial_route_decision = Column(String)  # 'weak' or 'strong'
+    final_route_decision = Column(String)    # May differ if timeout escalation
+    escalation_reason = Column(Text, nullable=True)
+
+    # Final model used
+    model_used = Column(String)
+
+    # Relationships
+    session = relationship("Session", back_populates="escalation_traces")
 
 
 class SemanticCacheEntry(Base):

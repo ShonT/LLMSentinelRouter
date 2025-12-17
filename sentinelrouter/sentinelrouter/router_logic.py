@@ -21,6 +21,7 @@ from .clients import (
     get_gemini_backup1_client,
     get_gemini_backup2_client,
     get_gemini_flash_latest_client,
+    get_openrouter_client,
     LLMResponse, 
     LLMClientError
 )
@@ -287,6 +288,19 @@ class Router:
         tier = "weak" if priority_group == "fast_tier" else "strong"
 
         for model_id, model_config in candidate_models:
+            # Check if this is an OpenRouter model (provider == "openrouter")
+            # If so, create a client getter dynamically
+            if model_config.provider == "openrouter":
+                # For OpenRouter models, we need to pass the model_key to the client
+                model_key = model_config.model_key
+                # Create a lambda that captures model_key
+                client_getter = lambda mk=model_key: get_openrouter_client(mk)
+            else:
+                # Use the static mapping for other providers
+                client_getter = client_getters.get(model_id)
+                if client_getter is None:
+                    logger.warning(f"No client getter for model {model_id}")
+                    continue
             # Check throttle ban
             if throttle_manager.is_banned(model_id):
                 ban_info = throttle_manager.get_ban_info(model_id)
@@ -353,13 +367,14 @@ class Router:
                         f"TPM={usage_stats['tokens_last_minute']}/{active_limits.tokens_per_minute}"
                     )
 
-            client_getter = client_getters.get(model_id)
-            if client_getter is None:
-                logger.warning(f"No client getter for model {model_id}")
-                continue
-
             try:
                 client = await client_getter()
+                
+                # For OpenRouter clients, check if API key is configured
+                if hasattr(client, 'is_available') and not client.is_available():
+                    logger.warning(f"OpenRouter model {model_id} unavailable (missing API key), skipping")
+                    continue
+                
                 model_used = model_id
                 logger.debug(f"Trying model: {model_id}")
 

@@ -5,6 +5,7 @@ Async HTTP clients for LLM providers (DeepSeek and Anthropic) with proper error 
 import asyncio
 import json
 import logging
+import os
 from typing import Dict, Any, Optional
 import httpx
 from pydantic import BaseModel
@@ -331,12 +332,145 @@ class AnthropicClient(BaseLLMClient):
         )
 
 
+class OpenRouterClient:
+    """Client for OpenRouter API (OpenAI-compatible endpoint with free-tier models)."""
+
+    def __init__(self, model_key: str):
+        """
+        Initialize OpenRouter client.
+        
+        Args:
+            model_key: The OpenRouter model ID (e.g., "meta-llama/llama-3.2-3b-instruct:free")
+        """
+        settings = get_settings()
+        self.api_key = getattr(settings, 'openrouter_api_key', None)
+        self.base_url = "https://openrouter.ai/api/v1"
+        self.model_key = model_key
+        self.http_referer = getattr(settings, 'openrouter_http_referer', "http://localhost")
+        self.app_title = getattr(settings, 'openrouter_app_title', "LLMSentinelRouter")
+        self.client = httpx.AsyncClient(timeout=60.0)
+        self.max_retries = 3
+        
+    async def close(self):
+        """Close the underlying HTTP client."""
+        await self.client.aclose()
+
+    def is_available(self) -> bool:
+        """Check if OpenRouter client is properly configured."""
+        return self.api_key is not None
+
+    async def chat_completion(self, messages: list, **kwargs) -> LLMResponse:
+        """
+        Call OpenRouter chat completion endpoint.
+        
+        Args:
+            messages: Chat messages in OpenAI format
+            **kwargs: Additional parameters (temperature, max_tokens, etc.)
+        
+        Returns:
+            LLMResponse with content, model, usage, and cost
+        """
+        if not self.is_available():
+            raise LLMClientError("OpenRouter API key not configured (OPENROUTER_API_KEY)")
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        # Add optional but recommended headers
+        if self.http_referer:
+            headers["HTTP-Referer"] = self.http_referer
+        if self.app_title:
+            headers["X-Title"] = self.app_title
+        
+        payload = {
+            "model": self.model_key,
+            "messages": messages,
+        }
+        
+        # Add optional parameters
+        if "temperature" in kwargs:
+            payload["temperature"] = kwargs["temperature"]
+        if "max_tokens" in kwargs:
+            payload["max_tokens"] = kwargs["max_tokens"]
+        if "stream" in kwargs:
+            payload["stream"] = kwargs["stream"]
+        if "tools" in kwargs:
+            payload["tools"] = kwargs["tools"]
+        if "tool_choice" in kwargs:
+            payload["tool_choice"] = kwargs["tool_choice"]
+        
+        url = f"{self.base_url}/chat/completions"
+        last_exception = None
+
+        for attempt in range(self.max_retries):
+            try:
+                logger.debug(f"Sending request to OpenRouter (attempt {attempt+1}/{self.max_retries})")
+                response = await self.client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                
+                # Extract response content (OpenAI-compatible format)
+                content = ""
+                if "choices" in data and len(data["choices"]) > 0:
+                    choice = data["choices"][0]
+                    if "message" in choice:
+                        content = choice["message"].get("content", "")
+                
+                # Extract usage information
+                usage = data.get("usage", {})
+                input_tokens = usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("completion_tokens", 0)
+                total_tokens = usage.get("total_tokens", input_tokens + output_tokens)
+                
+                usage_dict = {
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": output_tokens,
+                    "total_tokens": total_tokens
+                }
+                
+                # Free-tier models have zero cost
+                cost = 0.0
+                
+                return LLMResponse(
+                    content=content,
+                    model=self.model_key,
+                    usage=usage_dict,
+                    cost=cost,
+                )
+                
+            except httpx.HTTPStatusError as e:
+                last_exception = e
+                status = e.response.status_code
+                if status in (429, 503):  # rate limit or service unavailable
+                    wait = 2 ** attempt
+                    logger.warning(f"OpenRouter rate limited, waiting {wait}s...")
+                    await asyncio.sleep(wait)
+                    continue
+                else:
+                    logger.error(f"OpenRouter HTTP error: {status} - {e.response.text}")
+                    raise LLMClientError(f"OpenRouter HTTP error {status}: {e.response.text}") from e
+            except httpx.RequestError as e:
+                last_exception = e
+                logger.error(f"OpenRouter request error: {e}")
+                if attempt < self.max_retries - 1:
+                    wait = 1.0 * (attempt + 1)
+                    await asyncio.sleep(wait)
+                    continue
+                else:
+                    raise LLMClientError(f"OpenRouter request error after {self.max_retries} attempts: {e}") from e
+        
+        raise LLMClientError(f"OpenRouter max retries exceeded") from last_exception
+
+
 # Global client instances (singleton pattern)
 _deepseek_client: Optional[DeepSeekClient] = None
 _anthropic_client: Optional[AnthropicClient] = None
 _gemini_backup1_client: Optional['GeminiClient'] = None
 _gemini_backup2_client: Optional['GeminiClient'] = None
 _gemini_flash_latest_client: Optional['GeminiClient'] = None
+_openrouter_clients: Dict[str, OpenRouterClient] = {}
 
 
 async def get_deepseek_client() -> DeepSeekClient:
@@ -391,9 +525,25 @@ async def get_gemini_flash_latest_client() -> 'GeminiClient':
     return _gemini_flash_latest_client
 
 
+async def get_openrouter_client(model_key: str) -> OpenRouterClient:
+    """
+    Get or create an OpenRouter client instance for the given model.
+    
+    Args:
+        model_key: The OpenRouter model ID (e.g., "meta-llama/llama-3.2-3b-instruct:free")
+    
+    Returns:
+        OpenRouterClient instance
+    """
+    global _openrouter_clients
+    if model_key not in _openrouter_clients:
+        _openrouter_clients[model_key] = OpenRouterClient(model_key)
+    return _openrouter_clients[model_key]
+
+
 async def close_clients():
     """Close all client connections."""
-    global _deepseek_client, _anthropic_client, _gemini_backup1_client, _gemini_backup2_client, _gemini_flash_latest_client
+    global _deepseek_client, _anthropic_client, _gemini_backup1_client, _gemini_backup2_client, _gemini_flash_latest_client, _openrouter_clients
     if _deepseek_client:
         await _deepseek_client.close()
         _deepseek_client = None
@@ -409,3 +559,6 @@ async def close_clients():
     if _gemini_flash_latest_client:
         await _gemini_flash_latest_client.close()
         _gemini_flash_latest_client = None
+    for client in _openrouter_clients.values():
+        await client.close()
+    _openrouter_clients = {}

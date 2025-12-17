@@ -157,6 +157,7 @@ All configuration is done via environment variables. The most important ones are
 |----------|-------------|---------|
 | `DEEPSEEK_API_KEY` | API key for DeepSeek (weak model) | – |
 | `ANTHROPIC_API_KEY` | API key for Anthropic Claude (strong model) | – |
+| `OPENROUTER_API_KEY` | API key for OpenRouter free-tier models (optional) | – |
 | `MAX_COST_PER_SESSION` | Maximum allowed cost per session (USD) | 10.0 |
 | `INITIAL_THRESHOLD` | Initial complexity threshold for strong‑model escalation | 0.7 |
 | `ESCALATION_RATE_LIMIT` | Target escalation rate (5% rule) | 0.05 |
@@ -165,6 +166,63 @@ All configuration is done via environment variables. The most important ones are
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | INFO |
 
 See [.env.example](.env.example) for a complete list.
+
+## OpenRouter Integration
+
+SentinelRouter now supports OpenRouter's free-tier models as additional fallback options for weak-tier routing. This can help reduce costs and improve availability.
+
+### Setup
+
+1. Get an API key from [OpenRouter](https://openrouter.ai/)
+2. Add to your `.env` file:
+   ```bash
+   OPENROUTER_API_KEY=your-openrouter-key-here
+   ```
+
+### Pre-configured Free Models
+
+The following OpenRouter free-tier models are pre-configured and will be tried **first** in the weak-tier routing (before DeepSeek):
+
+- **Llama 3.2 3B Instruct** (`meta-llama/llama-3.2-3b-instruct:free`) - alias: `openrouter-llama-3.2-3b-free`
+- **Mistral 7B Instruct** (`mistralai/mistral-7b-instruct:free`) - alias: `openrouter-mistral-7b-free`
+
+### How It Works
+
+1. When a weak-tier request comes in, the router will try OpenRouter free models first
+2. If OpenRouter models fail or hit rate limits, the router automatically falls back to DeepSeek
+3. If `OPENROUTER_API_KEY` is not set, OpenRouter models are automatically skipped
+4. Free-tier models have zero cost in budget tracking
+
+### Rate Limits
+
+OpenRouter free-tier models typically have:
+- 20 requests per minute
+- 200 requests per day
+- 10,000 tokens per minute
+
+These limits are configured in `config/models_config.json` and enforced by the router.
+
+### Testing OpenRouter Integration
+
+```bash
+# With OpenRouter key set
+export OPENROUTER_API_KEY=your-key-here
+
+# Send a request (will use OpenRouter free model first)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{"role":"user","content":"Hello, how are you?"}]
+  }'
+
+# Without OpenRouter key, router falls back to DeepSeek
+unset OPENROUTER_API_KEY
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [{"role":"user","content":"Hello"}]
+  }'
+```
 
 ## Testing
 
