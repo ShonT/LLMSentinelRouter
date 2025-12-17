@@ -240,4 +240,4 @@ Logs are written to `logs/sentinelrouter.log` in JSON format and also printed to
 
 ## License
 
-MIT
+All Rights Reserved / Usage requires written consent.
