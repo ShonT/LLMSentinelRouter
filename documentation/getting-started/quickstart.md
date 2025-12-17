@@ -47,6 +47,21 @@ source venv/bin/activate   # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+### Quick Setup Script
+
+Alternatively, use the automated setup script that checks Python version, creates `.env`, installs dependencies, and verifies the installation:
+
+```bash
+./setup.sh
+```
+
+The script will:
+- ✅ Verify Python 3.11+ is installed
+- ✅ Create `.env` from `.env.example` if missing
+- ✅ Install all dependencies
+- ✅ Run verification tests
+- ✅ Provide setup status report
+
 ## Step 4: Initialize the Database
 
 The database is automatically created on first run, but you can manually initialize it:

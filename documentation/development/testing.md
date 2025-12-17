@@ -71,6 +71,33 @@ pytest tests/unit/test_judge.py -v
 pytest tests/unit/test_cycle_detector.py -v
 ```
 
+### Using Test Scripts
+
+The project includes convenient shell scripts for running tests:
+
+#### `run_tests.sh`
+Test suite runner with multiple options:
+
+```bash
+# Run all tests
+./run_tests.sh
+
+# Run only unit tests
+./run_tests.sh --unit
+
+# Run only integration tests
+./run_tests.sh --integration
+
+# Run fast test suite (no output)
+./run_tests.sh --fast
+
+# Run tests with coverage report
+./run_tests.sh --coverage
+
+# Show help
+./run_tests.sh --help
+```
+
 ### Running with Docker
 
 For consistent testing environments:
@@ -880,6 +907,66 @@ rm -rf .pytest_cache
 
 # Reinstall dependencies
 pip3 install -r requirements.txt
+```
+
+## Manual Testing & Debugging Scripts
+
+For manual verification and debugging, use the following scripts located in the `scripts/` directory:
+
+### Rate Limiter Testing
+
+#### `scripts/check_rate_limiter_state.py`
+Check the current state of the rate limiter after making requests:
+
+```bash
+python3 scripts/check_rate_limiter_state.py
+```
+
+**Output:**
+- Requests and tokens used in the last minute
+- Requests and tokens used in the last day
+- Confirms whether the rate limiter is recording usage correctly
+
+**Use when:**
+- Verifying rate limiter is working after system changes
+- Debugging unexpected rate limit behavior
+- Checking usage after a test request
+
+#### `scripts/verify_rate_limiter.py`
+Comprehensive rate limiter functionality verification:
+
+```bash
+python3 scripts/verify_rate_limiter.py
+```
+
+**Tests:**
+1. Records multiple requests and verifies usage tracking
+2. Checks that limits are enforced correctly
+3. Verifies preemptive blocking works as expected
+
+**Use when:**
+- Making changes to rate limiting logic
+- Verifying rate limiter after database migrations
+- Troubleshooting rate limit enforcement issues
+
+### Running the Scripts
+
+All scripts are executable and can be run directly:
+
+```bash
+# Make scripts executable (first time only)
+chmod +x scripts/*.py
+
+# Run any script
+./scripts/check_rate_limiter_state.py
+./scripts/verify_rate_limiter.py
+```
+
+Or use Python directly:
+
+```bash
+python3 scripts/check_rate_limiter_state.py
+python3 scripts/verify_rate_limiter.py
 ```
 
 **Pre-push hook not running?**
