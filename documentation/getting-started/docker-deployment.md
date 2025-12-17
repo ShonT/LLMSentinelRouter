@@ -138,8 +138,8 @@ All configuration can be supplied via environment variables. The following table
 |----------|---------|-------------|
 | `DEEPSEEK_API_KEY` | (required) | DeepSeek API key for weak‑model routing. |
 | `ANTHROPIC_API_KEY` | (required) | Anthropic API key for strong‑model routing. |
-| `GEMINI_BACKUP1_API_KEY` | `AIzaSyCmm7...` | Gemini API key for backup judge 1. |
-| `GEMINI_BACKUP2_API_KEY` | `AIzaSyBEgI...` | Gemini API key for backup judge 2 (primary judge). |
+| `GEMINI_BACKUP1_API_KEY` | `<REDACTED>` | Gemini API key for backup judge 1. |
+| `GEMINI_BACKUP2_API_KEY` | `<REDACTED>` | Gemini API key for backup judge 2 (primary judge). |
 | `WEAK_MODEL_ID` | `deepseek‑chat` | Model ID for the weak tier (used when judge is off). |
 | `STRONG_MODEL_ID` | `claude‑3‑haiku‑20240307` | Model ID for the strong tier. |
 | `MAX_COST_PER_SESSION` | `25.0` | Maximum cost (USD) per session before budget kill‑switch triggers. |

@@ -12,8 +12,8 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       # Gemini backup models API keys (optional, with defaults)
-      - GEMINI_BACKUP1_API_KEY=${GEMINI_BACKUP1_API_KEY:-AIzaSyCmm7euC6vHz39nJXEZAkqqJeUIB1rtVI8}
-      - GEMINI_BACKUP2_API_KEY=${GEMINI_BACKUP2_API_KEY:-AIzaSyBEgIiciMs-NIQqeoYtOfjkvCzVIAr5Fw8}
+      - GEMINI_BACKUP1_API_KEY=${GEMINI_BACKUP1_API_KEY}
+      - GEMINI_BACKUP2_API_KEY=${GEMINI_BACKUP2_API_KEY}
       # Core configuration (with defaults)
       - WEAK_MODEL_ID=${WEAK_MODEL_ID:-deepseek-chat}
       - STRONG_MODEL_ID=${STRONG_MODEL_ID:-claude-3-haiku-20240307}

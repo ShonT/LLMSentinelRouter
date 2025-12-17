@@ -21,9 +21,9 @@ class Settings(BaseSettings):
     deepseek_api_key: str = Field(..., env="DEEPSEEK_API_KEY")
     anthropic_api_key: str = Field(..., env="ANTHROPIC_API_KEY")
     
-    # Gemini API keys (backup models)
-    gemini_backup1_api_key: str = Field("AIzaSyCmm7euC6vHz39nJXEZAkqqJeUIB1rtVI8", env="GEMINI_BACKUP1_API_KEY")
-    gemini_backup2_api_key: str = Field("AIzaSyBEgIiciMs-NIQqeoYtOfjkvCzVIAr5Fw8", env="GEMINI_BACKUP2_API_KEY")
+    # Gemini API keys (backup models) - defaults removed for security
+    gemini_backup1_api_key: str = Field("", env="GEMINI_BACKUP1_API_KEY")
+    gemini_backup2_api_key: str = Field("", env="GEMINI_BACKUP2_API_KEY")
 
     # Model identifiers (kept for backward compatibility)
     weak_model_id: str = Field("deepseek-chat", env="WEAK_MODEL_ID")

@@ -119,7 +119,7 @@
       "display_name": "Gemini 2.5 Flash Lite (Judge Primary)",
       "provider": "gemini",
       "model_definition": "Gemini 2.5 Flash Lite - Primary judge for complexity assessment",
-      "model_key": "AIzaSyBEgIiciMs-NIQqeoYtOfjkvCzVIAr5Fw8",
+      "model_key": "<REDACTED>",
       "status": "ACTIVE",
       "status_valid_till": null,
       "capabilities": {
