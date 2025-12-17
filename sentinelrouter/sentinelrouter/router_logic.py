@@ -216,6 +216,9 @@ class Router:
             strict_mode,
             cycle_detected,
         )
+        
+        # Store initial route decision for escalation trace
+        initial_route_decision = route_decision
 
         decision_reason = self._build_decision_reason(
             route_decision,
@@ -286,6 +289,9 @@ class Router:
 
         # Set tier variable before entering the loop to avoid UnboundLocalError in exception handler
         tier = "weak" if priority_group == "fast_tier" else "strong"
+        
+        # Initialize latency tracking variables
+        latency_ms = 0.0  # Model API call latency
 
         for model_id, model_config in candidate_models:
             # Check if this is an OpenRouter model (provider == "openrouter")
@@ -609,6 +615,7 @@ class Router:
 
         # Log full request/response to file with tier and use_judge
         # Note: log_request_response internally calls log_routing_decision for database logging
+        route_end = time.time()
         await self.audit.log_request_response(
             session_id=session_id,
             request_id=request_id,
@@ -622,8 +629,12 @@ class Router:
                 "decision_reason": decision_reason,
                 "prompt_hash": str(prompt_hash_int),
                 "reason": decision_reason,
+                "model_latency_ms": latency_ms,
+                "judge_latency_ms": judge_latency_ms,
             },
             cost=response.cost,
+            start_time=datetime.fromtimestamp(route_start),
+            end_time=datetime.fromtimestamp(route_end),
             tier=tier,
             use_judge=use_judge,
         )
@@ -650,6 +661,44 @@ class Router:
             hash_distance = cycle_detector.recent_hashes[-1][0] if cycle_detector.recent_hashes else 0
             metrics.record_cycle_detection(session_id, hash_distance)
             logger.warning(f"Cycle logged for session {session_id}")
+        
+        # 10b. Log escalation trace for strong model escalations (final route decision = "strong")
+        # This captures the full decision path for debugging and analysis
+        if tier == "strong":  # final_route_decision is "strong"
+            # Get cycle detector state
+            cycle_hash_dist = None
+            cycle_rep_count = None
+            if cycle_detected and cycle_detector.recent_hashes:
+                cycle_hash_dist = cycle_detector.recent_hashes[-1][0]
+                cycle_rep_count = len(cycle_detector.recent_hashes)
+            
+            # Create request preview (first 500 chars)
+            request_preview = prompt[:500] if prompt else None
+            
+            # Log the trace
+            await self.audit.log_escalation_trace(
+                session_id=session_id,
+                request_id=request_id,
+                request_preview=request_preview,
+                cycle_detected=cycle_detected,
+                cycle_hash_distance=cycle_hash_dist,
+                cycle_repetition_count=cycle_rep_count,
+                cache_hit=cache_hit,
+                cache_confidence=cache_confidence,
+                cache_recommendation=cache_based_routing if cache_skip_judge else None,
+                cache_weak_calls=0,  # TODO: Track this if semantic cache stores stats
+                cache_strong_calls=0,  # TODO: Track this if semantic cache stores stats
+                judge_invoked=(not judge_skipped),
+                judge_complexity_score=complexity_score if not judge_skipped else None,
+                judge_impact_scope=impact_scope if not judge_skipped else None,
+                judge_reasoning=reasoning if not judge_skipped else None,
+                judge_latency_ms=judge_latency_ms,
+                initial_route_decision=initial_route_decision,
+                final_route_decision="strong",
+                escalation_reason=decision_reason,
+                model_used=model_used,
+            )
+            logger.info(f"Escalation trace logged for strong model escalation (session: {session_id}, request: {request_id})")
 
         # 11. Record semantic cache entry with full request/response metadata
         # SKIP caching if cycle detection forced the routing decision to avoid

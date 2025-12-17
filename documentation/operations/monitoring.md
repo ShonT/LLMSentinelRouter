@@ -255,6 +255,95 @@ docker logs sentinelrouter --tail 50
 curl http://localhost:8001/api/metrics | jq
 ```
 
+## 🔬 Enhanced Routing Decision Tracking
+
+**Added:** December 17, 2025
+
+### Database-Level Tracking
+
+Every routing decision now includes comprehensive token and latency tracking:
+
+#### Routing Decisions Table
+All requests are logged with:
+- **Token Metrics**: `input_tokens`, `output_tokens`, `total_tokens`
+- **Latency Metrics**: 
+  - `request_latency_ms` - Total end-to-end request time
+  - `model_latency_ms` - Time spent in LLM API call
+  - `judge_latency_ms` - Judge invocation time (if used)
+
+#### Escalation Traces Table
+Strong model escalations include detailed trace data:
+- **Request Info**: Preview of first 500 chars
+- **Cycle Detection**: detected flag, hash distance, repetition count
+- **Semantic Cache**: hit/miss, confidence, recommendation, call counts
+- **Judge Results**: invoked flag, complexity score, impact scope, reasoning, latency
+- **Routing Path**: initial decision, final decision, escalation reason
+- **Model Used**: Final model that handled the request
+
+### Query Examples
+
+**Token Usage by Model:**
+```sql
+SELECT 
+    model_used,
+    COUNT(*) as requests,
+    AVG(total_tokens) as avg_tokens,
+    SUM(total_tokens) as total_tokens
+FROM routing_decisions
+GROUP BY model_used
+ORDER BY total_tokens DESC;
+```
+
+**Latency Analysis:**
+```sql
+SELECT 
+    model_used,
+    AVG(request_latency_ms) as avg_request_ms,
+    AVG(model_latency_ms) as avg_model_ms,
+    AVG(judge_latency_ms) as avg_judge_ms
+FROM routing_decisions
+WHERE timestamp > datetime('now', '-1 hour')
+GROUP BY model_used;
+```
+
+**Escalation Patterns:**
+```sql
+SELECT 
+    cycle_detected,
+    cache_hit,
+    judge_invoked,
+    initial_route_decision,
+    final_route_decision,
+    COUNT(*) as occurrences
+FROM escalation_traces
+GROUP BY cycle_detected, cache_hit, judge_invoked, 
+         initial_route_decision, final_route_decision;
+```
+
+**Strong Model Escalation Reasons:**
+```sql
+SELECT 
+    escalation_reason,
+    COUNT(*) as count,
+    AVG(judge_complexity_score) as avg_complexity
+FROM escalation_traces
+WHERE judge_invoked = 1
+GROUP BY escalation_reason
+ORDER BY count DESC;
+```
+
+### Migration
+
+Run the migration script to add tracking to existing installations:
+
+```bash
+python3 scripts/migrate_enhanced_tracking.py
+```
+
+See `documentation/internal/enhanced-tracking-implementation.md` for full implementation details.
+
+---
+
 ## ✅ Summary
 
 The metrics system is fully operational with:
@@ -262,6 +351,7 @@ The metrics system is fully operational with:
 - ✅ Web dashboard on localhost:8001
 - ✅ Real-time metrics collection
 - ✅ Comprehensive tracking (latency, fallbacks, cycles, tokens/sec)
+- ✅ **Enhanced database-level tracking (tokens, latencies, escalation traces)**
 - ✅ Visual charts with auto-refresh
 - ✅ Thread-safe operations
 - ✅ Production-ready deployment

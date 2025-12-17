@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy.orm import Session as DBSession
 
-from .models import RoutingDecision, EscalationLog
+from .models import RoutingDecision, EscalationLog, EscalationTrace
 from .config import get_settings
 
 
@@ -104,9 +104,15 @@ class AuditLogger:
         prompt_hash: str,
         impact_scope: Optional[str] = None,
         reason: Optional[str] = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        total_tokens: int = 0,
+        request_latency_ms: float = 0.0,
+        model_latency_ms: float = 0.0,
+        judge_latency_ms: Optional[float] = None,
     ) -> None:
         """
-        Write a routing decision to the database.
+        Write a routing decision to the database with token and latency tracking.
         """
         decision = RoutingDecision(
             session_id=session_id,
@@ -117,11 +123,18 @@ class AuditLogger:
             prompt_hash=prompt_hash,
             impact_scope=impact_scope,
             reason=reason,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            request_latency_ms=request_latency_ms,
+            model_latency_ms=model_latency_ms,
+            judge_latency_ms=judge_latency_ms,
         )
         self.db.add(decision)
         self.db.commit()
         logging.debug(
-            f"Logged routing decision for session {session_id}, model {model_used}"
+            f"Logged routing decision for session {session_id}, model {model_used}, "
+            f"tokens: {total_tokens}, latency: {request_latency_ms:.2f}ms"
         )
 
     def log_escalation(
@@ -162,6 +175,62 @@ class AuditLogger:
         logging.warning(
             f"Cycle detected in session {session_id}: "
             f"prompt_hash={prompt_hash}, response_hash={response_hash}"
+        )
+    
+    def log_escalation_trace(
+        self,
+        session_id: str,
+        request_id: str,
+        request_preview: Optional[str] = None,
+        cycle_detected: bool = False,
+        cycle_hash_distance: Optional[float] = None,
+        cycle_repetition_count: Optional[int] = None,
+        cache_hit: bool = False,
+        cache_confidence: Optional[float] = None,
+        cache_recommendation: Optional[str] = None,
+        cache_weak_calls: int = 0,
+        cache_strong_calls: int = 0,
+        judge_invoked: bool = False,
+        judge_complexity_score: Optional[float] = None,
+        judge_impact_scope: Optional[str] = None,
+        judge_reasoning: Optional[str] = None,
+        judge_latency_ms: Optional[float] = None,
+        initial_route_decision: str = "weak",
+        final_route_decision: str = "strong",
+        escalation_reason: Optional[str] = None,
+        model_used: Optional[str] = None,
+    ) -> None:
+        """
+        Log a detailed escalation trace for strong model escalations.
+        Records the full decision path including cycle detection, cache, and judge results.
+        """
+        trace = EscalationTrace(
+            session_id=session_id,
+            request_id=request_id,
+            request_preview=request_preview,
+            cycle_detected=cycle_detected,
+            cycle_hash_distance=cycle_hash_distance,
+            cycle_repetition_count=cycle_repetition_count,
+            cache_hit=cache_hit,
+            cache_confidence=cache_confidence,
+            cache_recommendation=cache_recommendation,
+            cache_weak_calls=cache_weak_calls,
+            cache_strong_calls=cache_strong_calls,
+            judge_invoked=judge_invoked,
+            judge_complexity_score=judge_complexity_score,
+            judge_impact_scope=judge_impact_scope,
+            judge_reasoning=judge_reasoning,
+            judge_latency_ms=judge_latency_ms,
+            initial_route_decision=initial_route_decision,
+            final_route_decision=final_route_decision,
+            escalation_reason=escalation_reason,
+            model_used=model_used,
+        )
+        self.db.add(trace)
+        self.db.commit()
+        logging.info(
+            f"Logged escalation trace for session {session_id}, request {request_id}: "
+            f"{initial_route_decision} -> {final_route_decision} (reason: {escalation_reason})"
         )
 
 
@@ -261,6 +330,19 @@ class LoggingAudit:
         """
         start_time = start_time or datetime.utcnow()
         end_time = end_time or datetime.utcnow()
+        
+        # Calculate request latency from start/end times
+        request_latency_ms = (end_time - start_time).total_seconds() * 1000
+
+        # Extract token and latency data from response usage
+        usage = response.get("usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+        total_tokens = usage.get("total_tokens", input_tokens + output_tokens)
+        
+        # Get latencies from routing_decision
+        model_latency_ms = routing_decision.get("model_latency_ms", 0.0)
+        judge_latency_ms = routing_decision.get("judge_latency_ms")
 
         # Database logging (synchronous but run in thread to avoid blocking)
         await asyncio.to_thread(
@@ -273,6 +355,12 @@ class LoggingAudit:
             prompt_hash=routing_decision.get("prompt_hash", ""),
             impact_scope=routing_decision.get("impact_scope"),
             reason=routing_decision.get("reason"),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            request_latency_ms=request_latency_ms,
+            model_latency_ms=model_latency_ms,
+            judge_latency_ms=judge_latency_ms,
         )
 
         # File logging (asynchronous)
@@ -360,6 +448,56 @@ class LoggingAudit:
             session_id=session_id,
             prompt_hash=prompt_hash,
             response_hash=response_hash,
+        )
+    
+    async def log_escalation_trace(
+        self,
+        session_id: str,
+        request_id: str,
+        request_preview: Optional[str] = None,
+        cycle_detected: bool = False,
+        cycle_hash_distance: Optional[float] = None,
+        cycle_repetition_count: Optional[int] = None,
+        cache_hit: bool = False,
+        cache_confidence: Optional[float] = None,
+        cache_recommendation: Optional[str] = None,
+        cache_weak_calls: int = 0,
+        cache_strong_calls: int = 0,
+        judge_invoked: bool = False,
+        judge_complexity_score: Optional[float] = None,
+        judge_impact_scope: Optional[str] = None,
+        judge_reasoning: Optional[str] = None,
+        judge_latency_ms: Optional[float] = None,
+        initial_route_decision: str = "weak",
+        final_route_decision: str = "strong",
+        escalation_reason: Optional[str] = None,
+        model_used: Optional[str] = None,
+    ) -> None:
+        """
+        Log a detailed escalation trace for strong model escalations.
+        """
+        await asyncio.to_thread(
+            self.audit_logger.log_escalation_trace,
+            session_id=session_id,
+            request_id=request_id,
+            request_preview=request_preview,
+            cycle_detected=cycle_detected,
+            cycle_hash_distance=cycle_hash_distance,
+            cycle_repetition_count=cycle_repetition_count,
+            cache_hit=cache_hit,
+            cache_confidence=cache_confidence,
+            cache_recommendation=cache_recommendation,
+            cache_weak_calls=cache_weak_calls,
+            cache_strong_calls=cache_strong_calls,
+            judge_invoked=judge_invoked,
+            judge_complexity_score=judge_complexity_score,
+            judge_impact_scope=judge_impact_scope,
+            judge_reasoning=judge_reasoning,
+            judge_latency_ms=judge_latency_ms,
+            initial_route_decision=initial_route_decision,
+            final_route_decision=final_route_decision,
+            escalation_reason=escalation_reason,
+            model_used=model_used,
         )
 
     async def log_threshold_adjustment(
