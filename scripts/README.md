@@ -66,6 +66,31 @@ python3 scripts/verify_rate_limiter.py
 
 ---
 
+### `verify_functionality.py`
+**Purpose:** Verify recent functionality additions (OpenRouter, enhanced logging)
+
+**Usage:**
+```bash
+python3 scripts/verify_functionality.py
+```
+
+**Verifies:**
+1. Database schema (new columns and tables)
+2. Existing routing data (tokens, latencies, traces)
+3. OpenRouter configuration
+4. Request log files
+5. Judge model configuration
+
+**When to use:**
+- After upgrading to latest version
+- To verify enhanced tracking is working
+- To check OpenRouter integration
+- For system health checks
+
+**Note:** Does not make live API calls - checks existing data only.
+
+---
+
 ## Quick Reference
 
 All scripts can be run directly:

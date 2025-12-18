@@ -21,7 +21,9 @@ from .clients import (
     get_gemini_backup1_client,
     get_gemini_backup2_client,
     get_gemini_flash_latest_client,
+    get_gemini_client,
     get_openrouter_client,
+    get_groq_client,
     LLMResponse, 
     LLMClientError
 )
@@ -280,7 +282,7 @@ class Router:
 
         # Map model_id to client getter
         client_getters = {
-            "deepseek-chat": get_deepseek_client,
+            "deepseek-reasoner": get_deepseek_client,
             "claude-3-opus-20240229": get_anthropic_client,
             "gemini-2.5-flash": get_gemini_backup1_client,
             "gemini-2.5-flash-lite": get_gemini_backup2_client,
@@ -301,6 +303,16 @@ class Router:
                 model_key = model_config.model_key
                 # Create a lambda that captures model_key
                 client_getter = lambda mk=model_key: get_openrouter_client(mk)
+            elif model_config.provider == "groq":
+                # For Groq models, pass the model_key to the client
+                model_key = model_config.model_key
+                # Create a lambda that captures model_key
+                client_getter = lambda mk=model_key: get_groq_client(mk)
+            elif model_config.provider == "gemini":
+                # For Gemini models, pass the model_key to the generic client
+                model_key = model_config.model_key
+                # Create a lambda that captures model_key
+                client_getter = lambda mk=model_key: get_gemini_client(mk)
             else:
                 # Use the static mapping for other providers
                 client_getter = client_getters.get(model_id)

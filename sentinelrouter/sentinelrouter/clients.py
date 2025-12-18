@@ -332,6 +332,122 @@ class AnthropicClient(BaseLLMClient):
         )
 
 
+class GroqClient:
+    """Client for Groq API (quota-based free tier with OpenAI-compatible endpoint)."""
+
+    def __init__(self, model_key: str):
+        """
+        Initialize Groq client.
+        
+        Args:
+            model_key: The Groq model ID (e.g., "llama3-8b-8192", "mixtral-8x7b-32768")
+        """
+        settings = get_settings()
+        self.api_key = getattr(settings, 'groq_api_key', None)
+        self.base_url = "https://api.groq.com/openai/v1"
+        self.model_key = model_key
+        self.client = httpx.AsyncClient(timeout=60.0)
+        self.max_retries = 1  # Limited retries for quota-based service
+        
+    async def close(self):
+        """Close the underlying HTTP client."""
+        await self.client.aclose()
+
+    def is_available(self) -> bool:
+        """Check if Groq client is properly configured."""
+        return self.api_key is not None
+
+    async def chat_completion(self, messages: list, **kwargs) -> LLMResponse:
+        """
+        Call Groq chat completion endpoint.
+        
+        Args:
+            messages: Chat messages in OpenAI format
+            **kwargs: Additional parameters (temperature, max_tokens, etc.)
+        
+        Returns:
+            LLMResponse with content, model, usage, and cost (always 0.0 for quota-based)
+        """
+        if not self.is_available():
+            raise LLMClientError("Groq API key not configured (GROQ_API_KEY)")
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        payload = {
+            "model": self.model_key,
+            "messages": messages,
+        }
+        
+        # Add optional parameters
+        if "temperature" in kwargs:
+            payload["temperature"] = kwargs["temperature"]
+        if "max_tokens" in kwargs:
+            payload["max_tokens"] = kwargs["max_tokens"]
+        if "stream" in kwargs:
+            payload["stream"] = kwargs["stream"]
+        
+        url = f"{self.base_url}/chat/completions"
+        last_exception = None
+
+        for attempt in range(self.max_retries):
+            try:
+                logger.debug(f"Sending request to Groq (attempt {attempt+1}/{self.max_retries})")
+                response = await self.client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                
+                # Extract response content (OpenAI-compatible format)
+                content = ""
+                if "choices" in data and len(data["choices"]) > 0:
+                    choice = data["choices"][0]
+                    if "message" in choice:
+                        content = choice["message"].get("content", "")
+                
+                # Extract usage information
+                usage = data.get("usage", {})
+                input_tokens = usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("completion_tokens", 0)
+                total_tokens = usage.get("total_tokens", input_tokens + output_tokens)
+                
+                usage_dict = {
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": output_tokens,
+                    "total_tokens": total_tokens
+                }
+                
+                # Quota-based models have zero cost (not billed, just rate-limited)
+                cost = 0.0
+                
+                return LLMResponse(
+                    content=content,
+                    model=self.model_key,
+                    usage=usage_dict,
+                    cost=cost,
+                )
+                
+            except httpx.HTTPStatusError as e:
+                last_exception = e
+                status = e.response.status_code
+                if status == 429:  # Rate limit - do NOT retry aggressively
+                    logger.warning(f"Groq rate limited (429) - falling back to next model")
+                    raise LLMClientError(f"Groq rate limited: {e.response.text}") from e
+                elif status == 503:  # Service unavailable
+                    logger.warning(f"Groq service unavailable (503)")
+                    raise LLMClientError(f"Groq service unavailable: {e.response.text}") from e
+                else:
+                    logger.error(f"Groq HTTP error: {status} - {e.response.text}")
+                    raise LLMClientError(f"Groq HTTP error {status}: {e.response.text}") from e
+            except httpx.RequestError as e:
+                last_exception = e
+                logger.error(f"Groq request error: {e}")
+                raise LLMClientError(f"Groq request error: {e}") from e
+        
+        raise LLMClientError(f"Groq request failed") from last_exception
+
+
 class OpenRouterClient:
     """Client for OpenRouter API (OpenAI-compatible endpoint with free-tier models)."""
 
@@ -470,7 +586,9 @@ _anthropic_client: Optional[AnthropicClient] = None
 _gemini_backup1_client: Optional['GeminiClient'] = None
 _gemini_backup2_client: Optional['GeminiClient'] = None
 _gemini_flash_latest_client: Optional['GeminiClient'] = None
+_gemini_clients: Dict[str, 'GeminiClient'] = {}
 _openrouter_clients: Dict[str, OpenRouterClient] = {}
+_groq_clients: Dict[str, GroqClient] = {}
 
 
 async def get_deepseek_client() -> DeepSeekClient:
@@ -525,6 +643,27 @@ async def get_gemini_flash_latest_client() -> 'GeminiClient':
     return _gemini_flash_latest_client
 
 
+async def get_gemini_client(model_key: str) -> 'GeminiClient':
+    """
+    Get or create a Gemini client instance for the given model.
+    
+    Args:
+        model_key: The Gemini model ID (e.g., "gemini-2.5-flash", "gemini-3-flash-preview")
+    
+    Returns:
+        GeminiClient instance
+    """
+    global _gemini_clients
+    if model_key not in _gemini_clients:
+        settings = get_settings()
+        # Use backup2 API key for new Gemini models
+        _gemini_clients[model_key] = GeminiClient(
+            api_key=settings.gemini_backup2_api_key,
+            model_id=model_key
+        )
+    return _gemini_clients[model_key]
+
+
 async def get_openrouter_client(model_key: str) -> OpenRouterClient:
     """
     Get or create an OpenRouter client instance for the given model.
@@ -541,9 +680,25 @@ async def get_openrouter_client(model_key: str) -> OpenRouterClient:
     return _openrouter_clients[model_key]
 
 
+async def get_groq_client(model_key: str) -> GroqClient:
+    """
+    Get or create a Groq client instance for the given model.
+    
+    Args:
+        model_key: The Groq model ID (e.g., "llama3-8b-8192", "mixtral-8x7b-32768")
+    
+    Returns:
+        GroqClient instance
+    """
+    global _groq_clients
+    if model_key not in _groq_clients:
+        _groq_clients[model_key] = GroqClient(model_key)
+    return _groq_clients[model_key]
+
+
 async def close_clients():
     """Close all client connections."""
-    global _deepseek_client, _anthropic_client, _gemini_backup1_client, _gemini_backup2_client, _gemini_flash_latest_client, _openrouter_clients
+    global _deepseek_client, _anthropic_client, _gemini_backup1_client, _gemini_backup2_client, _gemini_flash_latest_client, _gemini_clients, _openrouter_clients, _groq_clients
     if _deepseek_client:
         await _deepseek_client.close()
         _deepseek_client = None
@@ -559,6 +714,12 @@ async def close_clients():
     if _gemini_flash_latest_client:
         await _gemini_flash_latest_client.close()
         _gemini_flash_latest_client = None
+    for client in _gemini_clients.values():
+        await client.close()
+    _gemini_clients = {}
     for client in _openrouter_clients.values():
         await client.close()
     _openrouter_clients = {}
+    for client in _groq_clients.values():
+        await client.close()
+    _groq_clients = {}

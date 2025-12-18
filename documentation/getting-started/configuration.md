@@ -105,8 +105,8 @@ Each model is defined under the `models` key. Example for DeepSeek Chat:
 #### Key Fields
 
 - **`display_name`**: Human‑readable name.
-- **`provider`**: One of `deepseek`, `anthropic`, `gemini`.
-- **`model_key`**: Provider‑specific model identifier (e.g., `"deepseek-chat"`).
+- **`provider`**: One of `deepseek`, `anthropic`, `gemini`, `groq`, `openrouter`.
+- **`model_key`**: Provider‑specific model identifier (e.g., `"deepseek-chat"`, `"llama-3.1-8b-instant"`).
 - **`status`**: `"ACTIVE"` or `"BANNED"`.
 - **`capabilities`**: Supported modalities and context window.
 - **`routing`**: Priority group (`fast_tier` or `strong_tier`) and order within that group.
@@ -177,7 +177,7 @@ To add a new LLM provider:
    ```json
    "my-new-model": {
      "display_name": "My New Model",
-     "provider": "anthropic",  // or deepseek, gemini
+     "provider": "anthropic",  // or deepseek, gemini, groq, openrouter
      "model_key": "claude-3-5-sonnet-20241022",
      "status": "ACTIVE",
      "capabilities": {

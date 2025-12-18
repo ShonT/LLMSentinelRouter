@@ -7,7 +7,7 @@ Get SentinelRouter up and running in under 5 minutes.
 - Python 3.11 or later
 - `pip` (Python package manager)
 - Git (optional, for cloning the repository)
-- API keys for at least one LLM provider (DeepSeek, Anthropic, or Gemini)
+- API keys for at least one LLM provider (DeepSeek, Anthropic, Gemini, Groq, or OpenRouter)
 
 ## Step 1: Clone the Repository
 
@@ -32,6 +32,10 @@ Edit `.env` with your favorite editor:
 # Required: at least one weak and one strong model key
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
+
+# Optional: Quota-based free tier providers
+GROQ_API_KEY=your_groq_api_key_here
+OPENROUTER_API_KEY=your_openrouter_api_key_here
 
 # Optional: Gemini keys for judge models
 GEMINI_API_KEY=your_gemini_api_key_here

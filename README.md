@@ -157,6 +157,7 @@ All configuration is done via environment variables. The most important ones are
 |----------|-------------|---------|
 | `DEEPSEEK_API_KEY` | API key for DeepSeek (weak model) | – |
 | `ANTHROPIC_API_KEY` | API key for Anthropic Claude (strong model) | – |
+| `GROQ_API_KEY` | API key for Groq quota-based free tier (optional) | – |
 | `OPENROUTER_API_KEY` | API key for OpenRouter free-tier models (optional) | – |
 | `MAX_COST_PER_SESSION` | Maximum allowed cost per session (USD) | 10.0 |
 | `INITIAL_THRESHOLD` | Initial complexity threshold for strong‑model escalation | 0.7 |
@@ -167,35 +168,54 @@ All configuration is done via environment variables. The most important ones are
 
 See [.env.example](.env.example) for a complete list.
 
-## OpenRouter Integration
+## Supported Providers
 
-SentinelRouter now supports OpenRouter's free-tier models as additional fallback options for weak-tier routing. This can help reduce costs and improve availability.
+SentinelRouter supports multiple LLM providers for flexible routing and cost optimization:
 
-### Setup
+### Primary Providers
+- **DeepSeek** (weak model, paid)
+- **Anthropic Claude** (strong model, paid)
+- **Gemini** (judge models)
 
+### Quota-Based Free Tier Providers
+
+#### Groq Integration
+SentinelRouter supports Groq's quota-based free tier for ultra-fast inference. See [documentation/getting-started/groq-setup.md](documentation/getting-started/groq-setup.md) for details.
+
+**Setup:**
+1. Get an API key from [Groq](https://console.groq.com/)
+2. Add to your `.env`:
+   ```bash
+   GROQ_API_KEY=your-groq-key-here
+   ```
+
+**Pre-configured Models:**
+- **Llama 3.1 8B Instant** - Primary weak model (~560 tps)
+- **Llama 3.3 70B Versatile** - Better reasoning (~280 tps)
+- **Qwen 3 32B** - Fallback model
+
+**Key Features:**
+- Ultra-fast inference (500-1000 tokens/second)
+- Quota-based (rate-limited, not billed)
+- ~30 RPM free tier
+- Zero cost in budget tracking
+
+#### OpenRouter Integration
+SentinelRouter also supports OpenRouter's free-tier models. See [documentation/getting-started/openrouter-setup.md](documentation/getting-started/openrouter-setup.md) for details.
+
+**Setup:**
 1. Get an API key from [OpenRouter](https://openrouter.ai/)
-2. Add to your `.env` file:
+2. Add to your `.env`:
    ```bash
    OPENROUTER_API_KEY=your-openrouter-key-here
    ```
 
-### Pre-configured Free Models
+**Pre-configured Free Models:**
+- **Llama 3.2 3B Instruct** - Small, fast
+- **Mistral 7B Instruct** - Good reasoning
+- **Mixtral 8x7B Instruct** - Best free model
 
-The following OpenRouter free-tier models are pre-configured and will be tried **first** in the weak-tier routing (before DeepSeek):
-
-- **Llama 3.2 3B Instruct** (`meta-llama/llama-3.2-3b-instruct:free`) - alias: `openrouter-llama-3.2-3b-free`
-- **Mistral 7B Instruct** (`mistralai/mistral-7b-instruct:free`) - alias: `openrouter-mistral-7b-free`
-
-### How It Works
-
-1. When a weak-tier request comes in, the router will try OpenRouter free models first
-2. If OpenRouter models fail or hit rate limits, the router automatically falls back to DeepSeek
-3. If `OPENROUTER_API_KEY` is not set, OpenRouter models are automatically skipped
-4. Free-tier models have zero cost in budget tracking
-
-### Rate Limits
-
-OpenRouter free-tier models typically have:
+**Rate Limits:**
 - 20 requests per minute
 - 200 requests per day
 - 10,000 tokens per minute
