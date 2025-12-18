@@ -436,10 +436,10 @@
       },
       "state": {
         "current_rpm": 0.0,
-        "requests_today": 23,
-        "tokens_today": 658417,
-        "total_cost_session": 0.09368226000000002,
-        "last_updated_ts": "2025-12-18 05:13:33.139529",
+        "requests_today": 61,
+        "tokens_today": 1448033,
+        "total_cost_session": 0.20641488000000002,
+        "last_updated_ts": "2025-12-18 09:19:45.602024",
         "exhausted_until_ts": null
       }
     },
@@ -706,10 +706,10 @@
       },
       "state": {
         "current_rpm": 0.0,
-        "requests_today": 20,
-        "tokens_today": 7239,
+        "requests_today": 21,
+        "tokens_today": 50489,
         "total_cost_session": 0.0,
-        "last_updated_ts": "2025-12-18 00:09:06.928901",
+        "last_updated_ts": "2025-12-18 06:21:15.823461",
         "exhausted_until_ts": null
       }
     },

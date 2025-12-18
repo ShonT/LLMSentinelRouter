@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -56,6 +57,16 @@ async def budget_middleware(request: Request, call_next):
     Budget kill‑switch middleware (Module A).
     Checks session budget before processing the request.
     """
+    # Log all requests to chat completions for debugging
+    if request.url.path == "/v1/chat/completions":
+        # Try to read body for logging (non-destructive peek)
+        body = await request.body()
+        logger.info(f"Incoming request to /v1/chat/completions - Body: {body.decode('utf-8', errors='ignore')[:500]}")
+        # Create new request with same body for downstream processing
+        async def receive():
+            return {"type": "http.request", "body": body}
+        request._receive = receive
+    
     # Only check for chat completions endpoint
     if request.url.path != "/v1/chat/completions":
         return await call_next(request)
@@ -128,6 +139,23 @@ class ChatCompletionResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: Dict[str, Any]
+
+# ============================================================================
+# Exception Handlers
+# ============================================================================
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log validation errors with full request details."""
+    body = await request.body()
+    logger.error(f"Validation error on {request.url.path}")
+    logger.error(f"Request body: {body.decode('utf-8', errors='ignore')}")
+    logger.error(f"Validation errors: {exc.errors()}")
+    
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()}
+    )
 
 # ============================================================================
 # Endpoints
@@ -342,6 +370,12 @@ async def chat_completions(request: ChatCompletionRequest, fastapi_request: Requ
     # Prepare OpenAI‑style response
     llm_response = result["response"]
     response_id = f"chatcmpl-{uuid.uuid4()}"
+    
+    # Log response content for debugging
+    logger.info(f"Response for session {session_id}: model={llm_response.model}, content_length={len(llm_response.content) if llm_response.content else 0}")
+    if not llm_response.content:
+        logger.warning(f"Empty response content for session {session_id}! Full response: {llm_response}")
+    
     choice = ChatCompletionChoice(
         index=0,
         message=ChatMessage(
@@ -377,7 +411,12 @@ async def chat_completions(request: ChatCompletionRequest, fastapi_request: Requ
         "X-Sentinel-Cycle-Detected": str(result["cycle_detected"]).lower(),
         "X-Sentinel-Session-ID": session_id,
     }
-    return JSONResponse(content=response_obj.dict(), headers=headers)
+    
+    # Log final response being sent
+    response_dict = response_obj.dict()
+    logger.info(f"Sending response for session {session_id}: {len(str(response_dict))} bytes")
+    
+    return JSONResponse(content=response_dict, headers=headers)
 
 # ============================================================================
 # Session Defaults Management API (for Dashboard)

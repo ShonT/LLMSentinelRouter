@@ -251,10 +251,19 @@ class DeepSeekClient(BaseLLMClient):
 
         data = await self._request_with_retry("/chat/completions", payload)
 
-        content = data["choices"][0]["message"]["content"]
+        message = data["choices"][0]["message"]
+        content = message.get("content", "")
+        
+        # DeepSeek-reasoner puts response in 'reasoning_content' instead of 'content'
+        # Fallback to reasoning_content if content is empty
+        if not content and "reasoning_content" in message:
+            content = message["reasoning_content"]
+            logger.debug(f"Using reasoning_content from DeepSeek-reasoner")
+        
         usage = data.get("usage")
-        # Calculate cost based on token usage and price per token
         total_tokens = usage.get("total_tokens", 0) if usage else 0
+        
+        # Calculate cost based on token usage and price per token
         cost = total_tokens * self.price_per_token
 
         return LLMResponse(
