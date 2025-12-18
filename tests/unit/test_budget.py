@@ -40,7 +40,7 @@ class TestBudgetKillSwitch:
         
         assert session.session_id == "test_session_1"
         assert session.current_cost == 0.0
-        assert session.max_cost_per_session == 10.0  # Default from config
+        assert session.max_cost_per_session == 25.0  # Default from config
         assert session.is_active is True
         
         # Verify it's persisted in database

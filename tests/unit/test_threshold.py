@@ -14,7 +14,7 @@ class TestDynamicThreshold:
         """Test threshold initialization with defaults."""
         threshold = DynamicThreshold()
         
-        assert threshold.threshold == 0.7  # Default from config
+        assert threshold.threshold == 0.9  # Default from config
         assert threshold.target_rate == 0.05  # 5% rule
         assert threshold.window_size == 20
         assert len(threshold.decision_window) == 0
