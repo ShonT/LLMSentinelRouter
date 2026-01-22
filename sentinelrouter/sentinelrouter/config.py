@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     enable_budget_killswitch: bool = Field(True, env="ENABLE_BUDGET_KILLSWITCH")
     enable_cycle_detection: bool = Field(True, env="ENABLE_CYCLE_DETECTION")
     enable_dynamic_threshold: bool = Field(True, env="ENABLE_DYNAMIC_THRESHOLD")
+    
+    # Redaction settings
+    redaction_mode: str = Field("logs", env="REDACTION_MODE")  # "none", "logs", or "strict"
+    redaction_strategy: str = Field("simple", env="REDACTION_STRATEGY")  # "simple" or "hmac"
+    redaction_salt: str = Field("change-me-in-production", env="REDACTION_SALT")  # For HMAC strategy
+    redaction_enabled_categories: str = Field("", env="REDACTION_CATEGORIES")  # Comma-separated, empty = all
 
     # Unified configuration file path
     models_config_path: str = Field("config/models_config.json", env="MODELS_CONFIG_PATH")

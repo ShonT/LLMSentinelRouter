@@ -59,7 +59,9 @@ class RoutingDecision(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
     model_used = Column(String)
     complexity_score = Column(Float)
-    cost_incurred = Column(Float)
+    cost_incurred = Column(Float)  # Final cost used (canonical)
+    cost_source = Column(String, default="unknown")  # "provider" | "computed" | "unknown"
+    computed_cost = Column(Float, nullable=True)  # Computed fallback for audit/debug
     prompt_hash = Column(String)
     impact_scope = Column(String, nullable=True)
     reason = Column(Text, nullable=True)

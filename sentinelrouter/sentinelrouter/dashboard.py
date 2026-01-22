@@ -1262,7 +1262,10 @@ async def dashboard_home():
                         <div class="log-details">
                             <div class="log-detail-item">Complexity: <strong>${log.complexity_score.toFixed(3)}</strong></div>
                             <div class="log-detail-item">Impact: <strong>${log.impact_scope}</strong></div>
-                            <div class="log-detail-item">Cost: <strong>$${log.cost_incurred.toFixed(4)}</strong></div>
+                            <div class="log-detail-item">
+                                Cost: <strong>$${log.cost_incurred.toFixed(4)}</strong>
+                                ${log.cost_source ? `<span class="badge badge-${log.cost_source === 'provider' ? 'success' : log.cost_source === 'computed' ? 'info' : 'secondary'}" style="font-size: 0.7em; margin-left: 4px;">${log.cost_source}</span>` : ''}
+                            </div>
                             <div class="log-detail-item">Cycle: ${log.cycle_detected ? '⚠️ Yes' : 'No'}</div>
                         </div>
                         ${log.request_preview || log.response_preview ? `
@@ -1545,6 +1548,8 @@ async def get_routing_logs(
             "model_used": log.model_used,
             "complexity_score": log.complexity_score or 0.0,
             "cost_incurred": log.cost_incurred or 0.0,
+            "cost_source": getattr(log, 'cost_source', 'unknown'),
+            "computed_cost": getattr(log, 'computed_cost', None),
             "impact_scope": log.impact_scope or "unknown",
             "reason": log.reason or "",
             "timestamp": log.timestamp.timestamp() if log.timestamp else 0,

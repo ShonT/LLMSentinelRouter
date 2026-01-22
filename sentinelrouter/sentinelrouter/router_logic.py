@@ -36,6 +36,7 @@ from .throttle_manager import get_throttle_manager
 from .state_manager import get_state_manager
 from .semantic_cache import SemanticCache
 from .rate_limiter import get_rate_limiter
+from .redaction import RedactionEngine, RedactionMode, HMACMasking, SimpleMasking
 
 logger = logging.getLogger(__name__)
 metrics = get_metrics_collector()
@@ -69,6 +70,7 @@ class Router:
         self.state_manager = None  # Will be set async
         self.semantic_cache = SemanticCache(db_session)
         self.judge = None  # Will be initialized with state_manager
+        self.redaction_engine = self._init_redaction_engine()
 
     async def _ensure_state_manager(self):
         if self.state_manager is None:
@@ -76,6 +78,38 @@ class Router:
             # Initialize judge with state_manager for config-driven behavior
             if self.judge is None:
                 self.judge = StingyJudge(state_manager=self.state_manager)
+    
+    def _init_redaction_engine(self) -> RedactionEngine:
+        """Initialize redaction engine from settings."""
+        settings = get_settings()
+        
+        # Parse mode
+        mode_str = settings.redaction_mode.lower()
+        mode = RedactionMode(mode_str) if mode_str in ["none", "logs", "strict"] else RedactionMode.LOGS
+        
+        # Parse strategy
+        if settings.redaction_strategy.lower() == "hmac":
+            strategy = HMACMasking(salt=settings.redaction_salt)
+        else:
+            strategy = SimpleMasking()
+        
+        # Parse categories
+        enabled_categories = None
+        if settings.redaction_enabled_categories:
+            enabled_categories = [
+                cat.strip() 
+                for cat in settings.redaction_enabled_categories.split(",")
+                if cat.strip()
+            ]
+        
+        engine = RedactionEngine(
+            mode=mode,
+            masking_strategy=strategy,
+            enabled_categories=enabled_categories
+        )
+        
+        logger.info(f"Redaction engine initialized: {engine.get_stats()}")
+        return engine
 
     def _get_cycle_detector(self, session_id: str) -> CycleDetector:
         """Get or create a cycle detector for the given session."""
@@ -110,6 +144,31 @@ class Router:
         await self._ensure_state_manager()
         request_id = request_id or str(uuid.uuid4())
         logger.info(f"Processing request {request_id} for session {session_id}")
+        
+        # 0. Redaction - Scan for sensitive data and apply based on mode
+        redaction_result = self.redaction_engine.scrub(prompt)
+        original_prompt = prompt  # Keep original for logs if needed
+        
+        # Apply STRICT mode redaction (LLM sees redacted)
+        if self.redaction_engine.should_redact_for_llm():
+            prompt = redaction_result.redacted_text
+            # Also redact messages
+            if messages:
+                redacted_messages = []
+                for msg in messages:
+                    redacted_msg = msg.copy()
+                    if "content" in redacted_msg:
+                        redacted_msg["content"] = self.redaction_engine.scrub(
+                            redacted_msg["content"]
+                        ).redacted_text
+                    redacted_messages.append(redacted_msg)
+                messages = redacted_messages
+            
+            if redaction_result.has_sensitive_data:
+                logger.warning(
+                    f"STRICT mode: Redacted sensitive data before LLM processing. "
+                    f"Patterns: {redaction_result.patterns_triggered}"
+                )
 
         semantic_hash = self.semantic_cache.build_semantic_hash(prompt, messages)
         cached_stats = self.semantic_cache.get_stats_for_prompt(prompt, messages)
@@ -292,8 +351,11 @@ class Router:
         # Set tier variable before entering the loop to avoid UnboundLocalError in exception handler
         tier = "weak" if priority_group == "fast_tier" else "strong"
         
-        # Initialize latency tracking variables
+        # Initialize latency and cost tracking variables
         latency_ms = 0.0  # Model API call latency
+        final_cost = 0.0
+        cost_source = "unknown"
+        computed_cost = None
 
         for model_id, model_config in candidate_models:
             # Check if this is an OpenRouter model (provider == "openrouter")
@@ -459,30 +521,55 @@ class Router:
                 # Record metrics (tier is already set before the loop)
                 metrics.record_model_latency(model_id, tier, latency_ms, "success")
 
-                # Calculate cost and update state
-                cost_incurred = 0.0
+                # Calculate cost with priority: provider > computed > unknown
+                final_cost = 0.0
+                cost_source = "unknown"
+                computed_cost = None  # For audit/debug
                 input_tokens = 0
                 output_tokens = 0
                 total_tokens = 0
                 
+                # Step 1: Check if provider gave us a cost
+                if hasattr(response, 'cost') and response.cost and response.cost > 0:
+                    final_cost = response.cost
+                    cost_source = "provider"
+                
+                # Step 2: Extract usage for fallback computation and tracking
                 if hasattr(response, 'usage') and response.usage:
                     input_tokens = response.usage.get('prompt_tokens', 0)
                     output_tokens = response.usage.get('completion_tokens', 0)
                     total_tokens = response.usage.get('total_tokens', 0)
                     
-                    # Calculate cost using model's pricing info
-                    if model_config.pricing and model_config.pricing.usage_tiers:
-                        # Use tiered pricing
-                        current_requests = model_state.requests_today if model_state else 0
-                        cost_incurred = model_config.pricing.calculate_cost(
-                            input_tokens, output_tokens, current_requests
-                        )
-                    else:
-                        # Use flat rate pricing
-                        cost_incurred = (
-                            (input_tokens / 1_000_000) * model_config.pricing.input_cost_per_m +
-                            (output_tokens / 1_000_000) * model_config.pricing.output_cost_per_m
-                        )
+                    # Compute fallback cost if we don't have provider cost
+                    if cost_source == "unknown" and model_config.pricing:
+                        if model_config.pricing.usage_tiers:
+                            # Use tiered pricing
+                            current_requests = model_state.requests_today if model_state else 0
+                            computed_cost = model_config.pricing.calculate_cost(
+                                input_tokens, output_tokens, current_requests
+                            )
+                        else:
+                            # Use flat rate pricing
+                            computed_cost = (
+                                (input_tokens / 1_000_000) * model_config.pricing.input_cost_per_m +
+                                (output_tokens / 1_000_000) * model_config.pricing.output_cost_per_m
+                            )
+                        
+                        if computed_cost and computed_cost > 0:
+                            final_cost = computed_cost
+                            cost_source = "computed"
+                    elif cost_source == "provider" and model_config.pricing:
+                        # Keep computed_cost for audit even if we're using provider cost
+                        if model_config.pricing.usage_tiers:
+                            current_requests = model_state.requests_today if model_state else 0
+                            computed_cost = model_config.pricing.calculate_cost(
+                                input_tokens, output_tokens, current_requests
+                            )
+                        else:
+                            computed_cost = (
+                                (input_tokens / 1_000_000) * model_config.pricing.input_cost_per_m +
+                                (output_tokens / 1_000_000) * model_config.pricing.output_cost_per_m
+                            )
                     
                     # Calculate tokens per second
                     if total_tokens > 0 and latency_ms > 0:
@@ -496,8 +583,15 @@ class Router:
                 await self.state_manager.increment_counter(model_id, "requests_today", 1)
                 if total_tokens > 0:
                     await self.state_manager.increment_counter(model_id, "tokens_today", total_tokens)
-                if cost_incurred > 0:
-                    await self.state_manager.increment_counter(model_id, "total_cost_session", cost_incurred)
+                if final_cost > 0:
+                    await self.state_manager.increment_counter(model_id, "total_cost_session", final_cost)
+                
+                # Log cost tracking info for debugging
+                if computed_cost is not None and abs(final_cost - computed_cost) > 0.001:
+                    logger.debug(
+                        f"Cost difference for {model_id}: provider=${final_cost:.6f}, "
+                        f"computed=${computed_cost:.6f}, source={cost_source}"
+                    )
                 
                 # Update timestamp (RPM now tracked by rate_limiter)
                 await self.state_manager.update_model_state(
@@ -614,7 +708,7 @@ class Router:
             cycle_detector.clear_last_response()
 
         # 7. Update budget with actual cost
-        self.budget.add_cost(session_id, response.cost)
+        self.budget.add_cost(session_id, final_cost)
 
         # Get current session cost for response headers
         session = self.budget.get_or_create_session(session_id)
@@ -624,6 +718,38 @@ class Router:
         import hashlib
         prompt_hash_int = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16)
         response_hash_int = int(hashlib.sha256(response.content.encode()).hexdigest()[:8], 16)
+        
+        # Apply LOGS mode redaction (audit logs see redacted, LLM saw original)
+        log_prompt = prompt
+        log_messages = messages
+        log_response_content = response.content
+        
+        if self.redaction_engine.should_redact_for_logs() and not self.redaction_engine.should_redact_for_llm():
+            # LOGS mode: LLM saw original, but logs get redacted
+            log_result = self.redaction_engine.scrub(original_prompt)
+            log_prompt = log_result.redacted_text
+            
+            if log_result.has_sensitive_data:
+                logger.info(
+                    f"LOGS mode: Redacting sensitive data in audit logs. "
+                    f"Patterns: {log_result.patterns_triggered}"
+                )
+            
+            # Redact messages for logs
+            if messages:
+                log_messages = []
+                for msg in messages:
+                    redacted_msg = msg.copy()
+                    if "content" in redacted_msg:
+                        redacted_msg["content"] = self.redaction_engine.scrub(
+                            redacted_msg["content"]
+                        ).redacted_text
+                    log_messages.append(redacted_msg)
+            
+            # Optionally redact response content in logs (if it echoes sensitive data)
+            response_redact = self.redaction_engine.scrub(response.content)
+            if response_redact.has_sensitive_data:
+                log_response_content = response_redact.redacted_text
 
         # Log full request/response to file with tier and use_judge
         # Note: log_request_response internally calls log_routing_decision for database logging
@@ -631,8 +757,8 @@ class Router:
         await self.audit.log_request_response(
             session_id=session_id,
             request_id=request_id,
-            request={"prompt": prompt, "messages": messages},
-            response={"content": response.content, "model": response.model, "usage": response.usage},
+            request={"prompt": log_prompt, "messages": log_messages},
+            response={"content": log_response_content, "model": response.model, "usage": response.usage},
             routing_decision={
                 "model_used": model_used,
                 "complexity_score": complexity_score,
@@ -643,8 +769,10 @@ class Router:
                 "reason": decision_reason,
                 "model_latency_ms": latency_ms,
                 "judge_latency_ms": judge_latency_ms,
+                "cost_source": cost_source,
+                "computed_cost": computed_cost,
             },
-            cost=response.cost,
+            cost=final_cost,
             start_time=datetime.fromtimestamp(route_start),
             end_time=datetime.fromtimestamp(route_end),
             tier=tier,
@@ -750,7 +878,7 @@ class Router:
                 judge_latency_ms=judge_latency_ms,
                 complexity_score=complexity_score,
                 impact_scope=impact_scope,
-                cost=response.cost,
+                cost=final_cost,
                 total_tokens=total_tokens,
             )
             # Record events are writes, not cache hits
@@ -767,7 +895,9 @@ class Router:
             "complexity_score": complexity_score,
             "impact_scope": impact_scope,
             "reasoning": reasoning,
-            "cost": response.cost,
+            "cost": final_cost,
+            "cost_source": cost_source,
+            "computed_cost": computed_cost,
             "session_cost": session_cost,
             "cycle_detected": cycle_detected,
             "decision_reason": decision_reason,

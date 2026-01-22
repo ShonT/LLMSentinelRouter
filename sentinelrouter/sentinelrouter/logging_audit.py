@@ -110,6 +110,8 @@ class AuditLogger:
         request_latency_ms: float = 0.0,
         model_latency_ms: float = 0.0,
         judge_latency_ms: Optional[float] = None,
+        cost_source: str = "unknown",
+        computed_cost: Optional[float] = None,
     ) -> None:
         """
         Write a routing decision to the database with token and latency tracking.
@@ -120,6 +122,8 @@ class AuditLogger:
             model_used=model_used,
             complexity_score=complexity_score,
             cost_incurred=cost_incurred,
+            cost_source=cost_source,
+            computed_cost=computed_cost,
             prompt_hash=prompt_hash,
             impact_scope=impact_scope,
             reason=reason,
@@ -343,6 +347,10 @@ class LoggingAudit:
         # Get latencies from routing_decision
         model_latency_ms = routing_decision.get("model_latency_ms", 0.0)
         judge_latency_ms = routing_decision.get("judge_latency_ms")
+        
+        # Get cost tracking fields
+        cost_source = routing_decision.get("cost_source", "unknown")
+        computed_cost = routing_decision.get("computed_cost")
 
         # Database logging (synchronous but run in thread to avoid blocking)
         await asyncio.to_thread(
@@ -361,6 +369,8 @@ class LoggingAudit:
             request_latency_ms=request_latency_ms,
             model_latency_ms=model_latency_ms,
             judge_latency_ms=judge_latency_ms,
+            cost_source=cost_source,
+            computed_cost=computed_cost,
         )
 
         # File logging (asynchronous)

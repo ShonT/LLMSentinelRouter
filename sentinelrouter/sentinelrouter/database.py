@@ -11,20 +11,35 @@ from .config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Module-level singletons for engine and session factory
+_engine = None
+_SessionLocal = None
+
+def _init_engine_and_session():
+    """Initialize the engine and session factory singletons if not already created."""
+    global _engine, _SessionLocal
+    if _engine is None:
+        settings = get_settings()
+        logger.info("Creating database engine (singleton)")
+        _engine = create_engine(
+            settings.database_url,
+            echo=False,  # Set to True for SQL logging
+            connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
+        )
+        _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
+        logger.info("Database engine and session factory initialized")
+
 # Lazy initialization of engine to avoid validation errors during imports
 def get_engine():
     """Return the database engine, initializing if necessary."""
-    settings = get_settings()
-    return create_engine(
-        settings.database_url,
-        echo=False,  # Set to True for SQL logging
-        connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {},
-    )
+    _init_engine_and_session()
+    return _engine
 
 # Lazy initialization of SessionLocal
 def get_session_local():
     """Return the sessionmaker, initializing if necessary."""
-    return sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
+    _init_engine_and_session()
+    return _SessionLocal
 
 
 def init_db() -> None:
