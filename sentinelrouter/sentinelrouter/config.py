@@ -80,6 +80,16 @@ class Settings(BaseSettings):
     redaction_salt: str = Field("change-me-in-production", env="REDACTION_SALT")  # For HMAC strategy
     redaction_enabled_categories: str = Field("", env="REDACTION_CATEGORIES")  # Comma-separated, empty = all
 
+    # Semantic similarity strategy (for cycle detection and caching)
+    semantic_strategy: str = Field("VECTORDB_LOCAL", env="SEMANTIC_STRATEGY")  # "SIMHASH", "VECTORDB_LOCAL", or "VECTORDB_API"
+    semantic_similarity_threshold: float = Field(0.85, env="SEMANTIC_SIMILARITY_THRESHOLD")  # 0.0 to 1.0
+    semantic_hash_bits: int = Field(64, env="SEMANTIC_HASH_BITS")  # For SIMHASH strategy
+    semantic_model_path: str = Field("", env="SEMANTIC_MODEL_PATH")  # Custom ONNX model path for VECTORDB_LOCAL
+    semantic_api_key: str = Field("", env="SEMANTIC_API_KEY")  # API key for VECTORDB_API (or uses openai_api_key)
+    semantic_api_provider: str = Field("openai", env="SEMANTIC_API_PROVIDER")  # "openai" or "voyage"
+    semantic_api_model: str = Field("text-embedding-3-small", env="SEMANTIC_API_MODEL")  # Model name for API
+    openai_api_key: str = Field("", env="OPENAI_API_KEY")  # OpenAI API key (for VECTORDB_API fallback)
+
     # Unified configuration file path
     models_config_path: str = Field("config/models_config.json", env="MODELS_CONFIG_PATH")
 

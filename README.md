@@ -12,7 +12,9 @@ SentinelRouter is a Python‑based local API gateway that sits between an autono
 - **Module A – Budget Kill‑Switch:** Tracks cumulative cost per session and rejects requests when `MAX_COST_PER_SESSION` is exceeded.
 - **Module B – "Stingy" Judge & Categorizer:** Uses a weak model (DeepSeek) to analyze prompt complexity and recommend a route (weak/strong).
 - **Module C – Dynamic Thresholding (5% Rule):** Adjusts routing strictness based on the escalation rate (percentage of requests escalated to the strong model). If the rate exceeds 5%, the threshold is raised (making the router "stingier").
-- **Module D – Graph‑Based Cycle Detection:** Uses `networkx` to build a directed graph of request‑response semantic hashes and blocks repetitive cycles.
+- **Module D – Graph‑Based Cycle Detection:** Uses `networkx` to build a directed graph of request‑response semantic hashes and blocks repetitive cycles. Supports three-tiered semantic strategies: SimHash (ultra-fast), Local Vectors (balanced), and API Vectors (highest precision).
+- **Semantic Similarity Strategies:** Pluggable three-tier system (SimHash/VECTORDB_LOCAL/VECTORDB_API) for detecting duplicate and paraphrased prompts with memory footprints from 5MB to 80MB.
+- **Async I/O Architecture:** Built on `httpx.AsyncClient` with connection pooling (100 max connections, 20 keepalive) for high-throughput concurrent request handling without thread pool exhaustion.
 - **OpenAI‑Compatible API:** Serves a standard `/v1/chat/completions` endpoint with added headers for monitoring.
 - **Structured JSON Logging & Audit Trail:** Every routing decision is logged to both the console and a JSON file, and stored in a SQLite database for post‑incident analysis.
 - **Docker Container:** Production‑ready multi‑stage build based on `python:3.11‑slim`, with non‑root user, resource limits (1 CPU, 512 MB RAM), health checks, and persistent storage.

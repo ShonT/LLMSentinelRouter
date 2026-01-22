@@ -47,7 +47,12 @@ class BaseLLMClient:
         self.model_id = model_id
         self.price_per_token = price_per_token
         self.auth_header_type = auth_header_type  # "bearer" or "x-api-key"
-        self.client = httpx.AsyncClient(timeout=60.0)
+        # Connection pooling: keep 100 connections open, max 20 idle
+        # This is crucial for high RPS scenarios to avoid thread pool exhaustion
+        self.client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            timeout=httpx.Timeout(60.0)
+        )
         self.max_retries = 3
 
     async def close(self):
