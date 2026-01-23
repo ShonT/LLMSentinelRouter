@@ -1,11 +1,14 @@
 """
 Pydantic models for the unified configuration schema.
+Implements operator-grade validation with referential integrity checks.
 """
 
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from typing import Dict, List, Literal, Optional, Union
 from datetime import datetime
+from enum import Enum
 import uuid
+import warnings
 
 
 class SessionDefaults(BaseModel):

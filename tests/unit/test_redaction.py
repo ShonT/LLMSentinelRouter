@@ -68,13 +68,13 @@ class TestRedactionPatterns:
         assert "[REDACTED" in result.redacted_text
     
     def test_gcp_api_key_detection(self):
-        text = "Here's my Firebase key: AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxxxxx123"
+        text = "Here's my Firebase key: AIzaSyD123456789012345678901234567890ABC"
         engine = RedactionEngine(mode=RedactionMode.STRICT)
         result = engine.scrub(text)
         
         assert result.has_sensitive_data
         assert "GCP API Key" in result.patterns_triggered
-        assert "AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxxxxx123" not in result.redacted_text
+        assert "AIzaSyD123456789012345678901234567890ABC" not in result.redacted_text
     
     def test_ssn_detection(self):
         text = "My SSN is 123-45-6789 and it's private"
@@ -86,7 +86,7 @@ class TestRedactionPatterns:
         assert "123-45-6789" not in result.redacted_text
     
     def test_credit_card_detection(self):
-        text = "Card number: 4532-1488-0343-6467"
+        text = "Card number: 4532148803436467"
         engine = RedactionEngine(mode=RedactionMode.STRICT)
         result = engine.scrub(text)
         

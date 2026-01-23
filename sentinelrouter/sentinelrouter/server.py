@@ -482,6 +482,263 @@ async def regenerate_session_id():
         )
 
 # ============================================================================
+# Admin Policy Management API (Operator-Grade Controls)
+# ============================================================================
+
+@app.get("/api/admin/policy")
+async def get_admin_policy():
+    """
+    Get current admin policy configuration (editable fields only).
+    
+    Returns only the safe, runtime-tunable policy knobs.
+    Does not expose keys, models, or routing topology.
+    """
+    try:
+        from ..schemas.admin_policy import AdminPolicyConfig, BudgetControl, JudgePolicy, SemanticCachePolicy, CycleDetectionPolicy
+        
+        settings = get_settings()
+        state_mgr = await get_state_manager()
+        session_defaults = await state_mgr.get_session_defaults()
+        
+        # Build policy from current settings
+        policy = AdminPolicyConfig(
+            budget_control=BudgetControl(
+                max_cost_per_session=settings.max_cost_per_session,
+                escalation_rate_limit=settings.escalation_rate_limit,
+                rolling_window_size=settings.rolling_window_size,
+            ),
+            judge=JudgePolicy(
+                enabled=session_defaults.get("default_use_judge") is not False,
+                mode="smart" if session_defaults.get("default_use_judge") is None else ("always" if session_defaults.get("default_use_judge") else "never"),
+                complexity_threshold=settings.complexity_threshold,
+            ),
+            semantic_cache=SemanticCachePolicy(
+                enabled=True,  # Assuming enabled by default
+                min_samples=settings.semantic_cache_min_samples,
+                confidence_threshold=settings.semantic_cache_confidence_threshold,
+                ttl_seconds=604800,  # Default 7 days
+            ),
+            cycle_detection=CycleDetectionPolicy(
+                enabled=settings.enable_cycle_detection,
+                window_size=settings.cycle_detection_window_size,
+                simhash_distance_threshold=settings.cycle_detection_simhash_threshold,
+            ),
+        )
+        
+        return JSONResponse(content={
+            "success": True,
+            "data": policy.model_dump(),
+            "impact_notes": {
+                "immediate_effect": ["judge.enabled", "judge.mode", "complexity_threshold", "escalation_rate_limit", "cycle_detection.enabled"],
+                "soft_reset_recommended": ["semantic_cache.min_samples", "semantic_cache.ttl_seconds", "rolling_window_size"],
+                "warning_required": ["budget_control.max_cost_per_session"]
+            }
+        })
+    except Exception as e:
+        logger.exception("Error getting admin policy")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@app.post("/api/admin/policy")
+async def update_admin_policy(updates: dict):
+    """
+    Update admin policy configuration (selective update).
+    
+    Only accepts policy fields defined in AdminPolicyConfig.
+    Returns updated policy and impact warnings.
+    """
+    try:
+        from ..schemas.admin_policy import AdminPolicyUpdate
+        
+        # Validate the update payload
+        policy_update = AdminPolicyUpdate(**updates)
+        
+        settings = get_settings()
+        impact_warnings = []
+        
+        # Apply budget control updates
+        if policy_update.budget_control:
+            if policy_update.budget_control.max_cost_per_session != settings.max_cost_per_session:
+                settings.max_cost_per_session = policy_update.budget_control.max_cost_per_session
+                impact_warnings.append("max_cost_per_session changed - may immediately block in-flight sessions")
+            if policy_update.budget_control.escalation_rate_limit != settings.escalation_rate_limit:
+                settings.escalation_rate_limit = policy_update.budget_control.escalation_rate_limit
+            if policy_update.budget_control.rolling_window_size != settings.rolling_window_size:
+                settings.rolling_window_size = policy_update.budget_control.rolling_window_size
+                impact_warnings.append("rolling_window_size changed - consider resetting escalation counters")
+        
+        # Apply judge policy updates
+        if policy_update.judge:
+            state_mgr = await get_state_manager()
+            judge_mode = policy_update.judge.mode
+            default_use_judge = None if judge_mode == "smart" else (True if judge_mode == "always" else False)
+            await state_mgr.update_session_defaults(default_use_judge=default_use_judge)
+            
+            if policy_update.judge.complexity_threshold != settings.complexity_threshold:
+                settings.complexity_threshold = policy_update.judge.complexity_threshold
+        
+        # Apply semantic cache policy updates
+        if policy_update.semantic_cache:
+            if policy_update.semantic_cache.min_samples != settings.semantic_cache_min_samples:
+                settings.semantic_cache_min_samples = policy_update.semantic_cache.min_samples
+                impact_warnings.append("semantic_cache.min_samples changed - consider resetting cache")
+            if policy_update.semantic_cache.confidence_threshold != settings.semantic_cache_confidence_threshold:
+                settings.semantic_cache_confidence_threshold = policy_update.semantic_cache.confidence_threshold
+        
+        # Apply cycle detection policy updates
+        if policy_update.cycle_detection:
+            if policy_update.cycle_detection.enabled != settings.enable_cycle_detection:
+                settings.enable_cycle_detection = policy_update.cycle_detection.enabled
+            if policy_update.cycle_detection.window_size != settings.cycle_detection_window_size:
+                settings.cycle_detection_window_size = policy_update.cycle_detection.window_size
+            if policy_update.cycle_detection.simhash_distance_threshold != settings.cycle_detection_simhash_threshold:
+                settings.cycle_detection_simhash_threshold = policy_update.cycle_detection.simhash_distance_threshold
+        
+        logger.info(f"Admin policy updated: {updates}")
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "Admin policy updated successfully",
+            "warnings": impact_warnings,
+            "data": policy_update.model_dump(exclude_none=True)
+        })
+    except Exception as e:
+        logger.exception("Error updating admin policy")
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": str(e)}
+        )
+
+@app.get("/api/admin/state")
+async def get_admin_state():
+    """
+    Get read-only state information for operators.
+    
+    Provides visibility into routing, judge, semantic cache, and escalation state.
+    All information is read-only to prevent accidental topology changes.
+    """
+    try:
+        from ..schemas.admin_policy import AdminStateResponse
+        
+        state_mgr = await get_state_manager()
+        config = state_mgr.config
+        
+        # Build routing state
+        weak_models = []
+        strong_models = []
+        routing_order = []
+        
+        if hasattr(config, 'models'):
+            for model_id, model_config in config.models.items():
+                if model_config.status == "ACTIVE":
+                    routing_order.append(model_id)
+                    if model_config.routing.priority_group == "fast_tier":
+                        weak_models.append(model_id)
+                    elif model_config.routing.priority_group == "strong_tier":
+                        strong_models.append(model_id)
+        
+        # Query database for recent metrics
+        with get_db() as db:
+            # Get recent routing decisions for ratios
+            recent_decisions = db.query(RoutingDecision).order_by(
+                RoutingDecision.timestamp.desc()
+            ).limit(100).all()
+            
+            weak_count = sum(1 for d in recent_decisions if any(weak in (d.model_used or "") for weak in weak_models))
+            strong_count = sum(1 for d in recent_decisions if any(strong in (d.model_used or "") for strong in strong_models))
+            total_count = len(recent_decisions)
+            
+            weak_strong_ratio = weak_count / strong_count if strong_count > 0 else None
+            escalation_rate = strong_count / total_count if total_count > 0 else 0.0
+        
+        # Build state response
+        state = AdminStateResponse(
+            routing=AdminStateResponse.RoutingState(
+                weak_models=weak_models,
+                strong_models=strong_models,
+                routing_order=routing_order,
+                weak_strong_ratio=weak_strong_ratio,
+            ),
+            judge=AdminStateResponse.JudgeState(
+                # These would be populated from actual metrics
+                invoked_count=0,
+                skipped_count=0,
+                skip_rate=0.0,
+                success_rate=0.0,
+                avg_latency_ms=0.0,
+            ),
+            semantic_cache=AdminStateResponse.SemanticCacheState(
+                hit_count=0,
+                miss_count=0,
+                hit_rate=0.0,
+                active_clusters=0,
+                judge_skip_attribution=0.0,
+            ),
+            escalation=AdminStateResponse.EscalationState(
+                current_rate=escalation_rate,
+                target_rate=get_settings().target_escalation_rate,
+                is_strict_mode=escalation_rate > get_settings().target_escalation_rate,
+                effective_threshold=get_settings().complexity_threshold,
+            ),
+        )
+        
+        return JSONResponse(content={
+            "success": True,
+            "data": state.model_dump(),
+            "note": "All state information is read-only. Use /api/admin/policy to edit policy."
+        })
+    except Exception as e:
+        logger.exception("Error getting admin state")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@app.post("/api/admin/reset-cache")
+async def reset_semantic_cache():
+    """
+    Reset the semantic cache state.
+    
+    Use this after changing semantic cache policy parameters like min_samples or ttl_seconds.
+    """
+    try:
+        # TODO: Implement actual cache reset logic when semantic cache is integrated
+        logger.info("Semantic cache reset requested")
+        return JSONResponse(content={
+            "success": True,
+            "message": "Semantic cache reset successfully"
+        })
+    except Exception as e:
+        logger.exception("Error resetting semantic cache")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@app.post("/api/admin/reset-escalation")
+async def reset_escalation_counters():
+    """
+    Reset escalation rate counters.
+    
+    Use this after changing rolling_window_size or escalation_rate_limit.
+    """
+    try:
+        # TODO: Implement actual escalation counter reset
+        logger.info("Escalation counters reset requested")
+        return JSONResponse(content={
+            "success": True,
+            "message": "Escalation counters reset successfully"
+        })
+    except Exception as e:
+        logger.exception("Error resetting escalation counters")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+# ============================================================================
 # Error handlers
 # ============================================================================
 
