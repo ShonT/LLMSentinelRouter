@@ -29,6 +29,9 @@ class Session(Base):
     - 'free': Lower rate limits (default)
     - 'paid': Higher rate limits
     - 'premium': Highest rate limits
+    
+    Uses version column for optimistic concurrency control to prevent
+    race conditions during budget updates.
     """
     __tablename__ = "sessions"
 
@@ -39,6 +42,7 @@ class Session(Base):
     max_cost_per_session = Column(Float, default=10.0)
     current_cost = Column(Float, default=0.0)
     is_active = Column(Boolean, default=True)
+    version = Column(Integer, default=0, nullable=False)  # For optimistic concurrency control
 
     # Relationships
     routing_decisions = relationship("RoutingDecision", back_populates="session")

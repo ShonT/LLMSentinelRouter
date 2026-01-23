@@ -332,14 +332,34 @@ async def chat_completions(request: ChatCompletionRequest, fastapi_request: Requ
     
     logger.info(f"Request params: session_id={session_id}, tier={tier}, use_judge={use_judge}")
 
-    # Convert messages to list of dicts for router
-    messages = [msg.dict() for msg in request.messages]
+    # Validate and convert messages to list of dicts for router
+    if not request.messages:
+        raise HTTPException(status_code=400, detail="Messages array cannot be empty.")
+    
+    messages = []
+    for msg in request.messages:
+        msg_dict = msg.dict()
+        # Validate content field exists and is not None
+        if msg_dict.get("content") is None:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Message with role '{msg_dict.get('role', 'unknown')}' has null or missing content."
+            )
+        # Ensure content is a string
+        if not isinstance(msg_dict.get("content"), str):
+            msg_dict["content"] = str(msg_dict["content"])
+        messages.append(msg_dict)
 
     # Extract prompt from messages (simple concatenation for judge)
     user_messages = [msg for msg in messages if msg["role"] == "user"]
     if not user_messages:
         raise HTTPException(status_code=400, detail="No user message found in request.")
-    prompt = user_messages[-1]["content"]
+    
+    # Safely extract content from last user message
+    last_user_msg = user_messages[-1]
+    prompt = last_user_msg.get("content", "")
+    if not prompt or not isinstance(prompt, str):
+        raise HTTPException(status_code=400, detail="User message content must be a non-empty string.")
 
     try:
         # Route the request

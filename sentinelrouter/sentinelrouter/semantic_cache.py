@@ -169,13 +169,31 @@ class SemanticCache:
         return self.db.get(SemanticCacheStats, semantic_hash)
 
     def confidence_for_hash(self, semantic_hash: str) -> float:
+        """
+        Calculate routing confidence based on weak/strong call distribution.
+        
+        Confidence is calculated ONLY from weak_calls and strong_calls, 
+        excluding calls to other models (which don't inform routing decisions).
+        This prevents false confidence when using models that aren't classified
+        as weak or strong (e.g., backup models, judge models).
+        
+        Returns:
+            float: Confidence value between 0.0 and 1.0
+        """
         stats = self.db.get(SemanticCacheStats, semantic_hash)
         if stats is None or stats.total_calls < self.min_samples:
             return 0.0
 
-        other_calls = max(0, stats.total_calls - stats.weak_calls - stats.strong_calls)
-        dominant = max(stats.weak_calls, stats.strong_calls, other_calls)
-        confidence = dominant / stats.total_calls if stats.total_calls else 0.0
+        # Only consider weak and strong calls for routing confidence
+        routable_calls = stats.weak_calls + stats.strong_calls
+        
+        if routable_calls == 0:
+            # No routing-relevant calls yet
+            return 0.0
+        
+        # Calculate confidence as the proportion of the dominant route
+        dominant = max(stats.weak_calls, stats.strong_calls)
+        confidence = dominant / routable_calls
         return min(1.0, confidence)
 
     def has_confident_history(self, prompt: str, context: Optional[Any]) -> Tuple[bool, float]:

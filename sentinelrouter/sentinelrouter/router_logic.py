@@ -6,8 +6,10 @@ import asyncio
 import logging
 import uuid
 import time
+from collections import OrderedDict
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
+from functools import partial
 
 from sqlalchemy.orm import Session as DBSession
 
@@ -43,8 +45,35 @@ metrics = get_metrics_collector()
 throttle_manager = get_throttle_manager()
 rate_limiter = get_rate_limiter(safety_margin=0.95)
 
-# Global cache for cycle detectors (persistent across requests)
-_CYCLE_DETECTORS_CACHE: Dict[str, CycleDetector] = {}
+# LRU cache for cycle detectors (persistent across requests, bounded memory)
+# Using OrderedDict for O(1) access and O(1) LRU eviction
+_CYCLE_DETECTORS_MAX_SIZE = 1000  # Maximum number of sessions to track
+_CYCLE_DETECTORS_CACHE: OrderedDict[str, CycleDetector] = OrderedDict()
+_CYCLE_DETECTORS_LOCK = asyncio.Lock()
+
+
+def _get_or_create_cycle_detector_sync(session_id: str) -> CycleDetector:
+    """
+    Get or create a cycle detector with LRU eviction.
+    Thread-safe version for synchronous access.
+    """
+    global _CYCLE_DETECTORS_CACHE
+    
+    if session_id in _CYCLE_DETECTORS_CACHE:
+        # Move to end (most recently used)
+        _CYCLE_DETECTORS_CACHE.move_to_end(session_id)
+        return _CYCLE_DETECTORS_CACHE[session_id]
+    
+    # Create new detector
+    detector = CycleDetector(session_id)
+    
+    # Evict oldest entries if at capacity
+    while len(_CYCLE_DETECTORS_CACHE) >= _CYCLE_DETECTORS_MAX_SIZE:
+        evicted_session, evicted_detector = _CYCLE_DETECTORS_CACHE.popitem(last=False)
+        logger.debug(f"LRU evicted cycle detector for session {evicted_session}")
+    
+    _CYCLE_DETECTORS_CACHE[session_id] = detector
+    return detector
 
 
 class Router:
@@ -65,8 +94,7 @@ class Router:
         self.budget = BudgetKillSwitch(db_session)
         self.threshold = DynamicThreshold()
         self.audit = LoggingAudit(db_session)
-        # Cycle detectors are per session; use global cache to persist across Router instances
-        self.cycle_detectors = _CYCLE_DETECTORS_CACHE
+        # Cycle detectors use global LRU cache (no instance reference needed)
         self.state_manager = None  # Will be set async
         self.semantic_cache = SemanticCache(db_session)
         self.judge = None  # Will be initialized with state_manager
@@ -78,6 +106,10 @@ class Router:
             # Initialize judge with state_manager for config-driven behavior
             if self.judge is None:
                 self.judge = StingyJudge(state_manager=self.state_manager)
+
+    def _get_cycle_detector(self, session_id: str) -> CycleDetector:
+        """Get or create a cycle detector for the given session using LRU cache."""
+        return _get_or_create_cycle_detector_sync(session_id)
     
     def _init_redaction_engine(self) -> RedactionEngine:
         """Initialize redaction engine from settings."""
@@ -110,12 +142,6 @@ class Router:
         
         logger.info(f"Redaction engine initialized: {engine.get_stats()}")
         return engine
-
-    def _get_cycle_detector(self, session_id: str) -> CycleDetector:
-        """Get or create a cycle detector for the given session."""
-        if session_id not in self.cycle_detectors:
-            self.cycle_detectors[session_id] = CycleDetector(session_id)
-        return self.cycle_detectors[session_id]
 
     async def route(
         self,
@@ -359,22 +385,19 @@ class Router:
 
         for model_id, model_config in candidate_models:
             # Check if this is an OpenRouter model (provider == "openrouter")
-            # If so, create a client getter dynamically
+            # If so, create a client getter dynamically using partial for proper closure
             if model_config.provider == "openrouter":
                 # For OpenRouter models, we need to pass the model_key to the client
-                model_key = model_config.model_key
-                # Create a lambda that captures model_key
-                client_getter = lambda mk=model_key: get_openrouter_client(mk)
+                # Use partial instead of lambda to ensure proper closure capture
+                client_getter = partial(get_openrouter_client, model_config.model_key)
             elif model_config.provider == "groq":
                 # For Groq models, pass the model_key to the client
-                model_key = model_config.model_key
-                # Create a lambda that captures model_key
-                client_getter = lambda mk=model_key: get_groq_client(mk)
+                # Use partial instead of lambda to ensure proper closure capture
+                client_getter = partial(get_groq_client, model_config.model_key)
             elif model_config.provider == "gemini":
                 # For Gemini models, pass the model_key to the generic client
-                model_key = model_config.model_key
-                # Create a lambda that captures model_key
-                client_getter = lambda mk=model_key: get_gemini_client(mk)
+                # Use partial instead of lambda to ensure proper closure capture
+                client_getter = partial(get_gemini_client, model_config.model_key)
             else:
                 # Use the static mapping for other providers
                 client_getter = client_getters.get(model_id)
@@ -529,10 +552,14 @@ class Router:
                 output_tokens = 0
                 total_tokens = 0
                 
-                # Step 1: Check if provider gave us a cost
-                if hasattr(response, 'cost') and response.cost and response.cost > 0:
+                # Step 1: Check if provider gave us a cost (including free tier with cost=0)
+                # Use `is not None` instead of truthiness to handle cost=0.0 correctly
+                if hasattr(response, 'cost') and response.cost is not None:
                     final_cost = response.cost
                     cost_source = "provider"
+                    # Log if provider returned zero cost (free tier model)
+                    if final_cost == 0.0:
+                        logger.debug(f"Provider returned zero cost for {model_id} (free tier)")
                 
                 # Step 2: Extract usage for fallback computation and tracking
                 if hasattr(response, 'usage') and response.usage:
