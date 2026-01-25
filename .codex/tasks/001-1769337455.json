@@ -1,0 +1,40 @@
+{
+  "created_at": "2026-01-25T10:37:53.370843Z",
+  "definition_of_done": [
+    "Configuration supports three-layer architecture (keys, key instances, models) and can be loaded from the new config file format.",
+    "Multiple API keys per provider are supported with priority-based selection and failover across key instances.",
+    "Key rotation can occur without service restart and reflects in active routing behavior.",
+    "Backward compatibility is preserved for existing models_config.json users during migration.",
+    "Documentation is updated to describe the new configuration approach and migration notes."
+  ],
+  "delta_allowed": true,
+  "delta_depth": 0,
+  "expected_files": [
+    "config/sentinel_config_demo.json",
+    "config/models_config.json",
+    "sentinelrouter/sentinelrouter/config.py",
+    "sentinelrouter/sentinelrouter/state_manager.py",
+    "documentation/configuration/pydantic-config.md",
+    "README.md"
+  ],
+  "issue_id": "001",
+  "metadata": {
+    "delta_allowed": true,
+    "delta_depth": 0,
+    "is_delta_task": false,
+    "issue_id": "001",
+    "task_id": "001-1769337455"
+  },
+  "non_goals": [
+    "Refactoring unrelated routing logic or provider integrations.",
+    "Changing existing model pricing, rate limits, or routing policies beyond config schema support.",
+    "Building a UI for key management."
+  ],
+  "required_tests": [
+    "Config loading/validation covers new schema plus legacy schema compatibility.",
+    "Runtime update path applies key rotation without restart and updates routing selection order.",
+    "Failover behavior selects the next eligible key instance when a key is unavailable or limited."
+  ],
+  "task_id": "001-1769337455",
+  "test_command": "./run_tests.sh"
+}
