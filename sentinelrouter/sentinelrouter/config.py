@@ -39,7 +39,9 @@ class Settings(BaseSettings):
 
     # Optional provider API keys
     openrouter_api_key: str = Field("", env="OPENROUTER_API_KEY")
-    openrouter_http_referer: str = Field("http://localhost", env="OPENROUTER_HTTP_REFERER")
+    openrouter_http_referer: str = Field(
+        "http://localhost", env="OPENROUTER_HTTP_REFERER"
+    )
     openrouter_app_title: str = Field("LLMSentinelRouter", env="OPENROUTER_APP_TITLE")
     groq_api_key: str = Field("", env="GROQ_API_KEY")
 
