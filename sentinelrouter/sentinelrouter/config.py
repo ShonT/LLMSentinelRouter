@@ -250,14 +250,19 @@ def _load_legacy_unified_config() -> UnifiedConfig:
 
 
 def _provider_env_value(provider: ProviderType) -> str:
-    env_map = {
-        ProviderType.DEEPSEEK: "DEEPSEEK_API_KEY",
-        ProviderType.ANTHROPIC: "ANTHROPIC_API_KEY",
-        ProviderType.GEMINI: "GEMINI_API_KEY",
-        ProviderType.GROQ: "GROQ_API_KEY",
-        ProviderType.OPENROUTER: "OPENROUTER_API_KEY",
+    """Get API key for a provider from Settings (which loads .env file)."""
+    settings = get_settings()
+    provider_attr_map = {
+        ProviderType.DEEPSEEK: "deepseek_api_key",
+        ProviderType.ANTHROPIC: "anthropic_api_key",
+        ProviderType.GEMINI: "gemini_backup1_api_key",  # Use first Gemini key
+        ProviderType.GROQ: "groq_api_key",
+        ProviderType.OPENROUTER: "openrouter_api_key",
     }
-    return os.getenv(env_map.get(provider, ""), "")
+    attr_name = provider_attr_map.get(provider)
+    if attr_name:
+        return getattr(settings, attr_name, "")
+    return ""
 
 
 def _build_sentinel_config_from_legacy(config: UnifiedConfig) -> SentinelConfig:
