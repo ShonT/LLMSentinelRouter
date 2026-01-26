@@ -2,11 +2,12 @@ name: PR Validation
 
 on:
   pull_request:
-  pull_request_target:
   push:
     branches:
       - main
-      - '**'
+      - 'fix/**'
+      - 'feature/**'
+      - 'ci/**'
 
 jobs:
   validate:
