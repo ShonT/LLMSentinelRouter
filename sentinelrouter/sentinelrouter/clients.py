@@ -5,8 +5,8 @@ Async HTTP clients for LLM providers (DeepSeek and Anthropic) with proper error 
 import asyncio
 import json
 import logging
-import os
-from typing import Dict, Any, Optional
+from dataclasses import dataclass
+from typing import Dict, Any, Optional, Tuple
 import httpx
 from pydantic import BaseModel
 
@@ -234,13 +234,17 @@ class GeminiClient(BaseLLMClient):
 class DeepSeekClient(BaseLLMClient):
     """Client for DeepSeek API."""
 
-    def __init__(self):
-        settings = get_settings()  # Get settings at runtime
+    def __init__(
+        self,
+        api_key: str,
+        model_id: str = "deepseek-chat",
+        price_per_token: float = DEEPSEEK_PRICE_PER_TOKEN,
+    ):
         super().__init__(
-            api_key=settings.deepseek_api_key,
+            api_key=api_key,
             base_url="https://api.deepseek.com",
-            model_id=settings.weak_model_id,
-            price_per_token=DEEPSEEK_PRICE_PER_TOKEN,
+            model_id=model_id,
+            price_per_token=price_per_token,
         )
 
     async def chat_completion(self, messages: list, **kwargs) -> LLMResponse:
@@ -282,13 +286,17 @@ class DeepSeekClient(BaseLLMClient):
 class AnthropicClient(BaseLLMClient):
     """Client for Anthropic Claude API (Claude Opus 4.5)."""
 
-    def __init__(self):
-        settings = get_settings()  # Get settings at runtime
+    def __init__(
+        self,
+        api_key: str,
+        model_id: str = "claude-3-opus-20240229",
+        price_per_token: float = CLAUDE_OPUS_PRICE_PER_TOKEN,
+    ):
         super().__init__(
-            api_key=settings.anthropic_api_key,
+            api_key=api_key,
             base_url="https://api.anthropic.com",
-            model_id=settings.strong_model_id,
-            price_per_token=CLAUDE_OPUS_PRICE_PER_TOKEN,
+            model_id=model_id,
+            price_per_token=price_per_token,
             auth_header_type="x-api-key",  # Anthropic uses x-api-key header
         )
 
@@ -349,7 +357,7 @@ class AnthropicClient(BaseLLMClient):
 class GroqClient:
     """Client for Groq API (quota-based free tier with OpenAI-compatible endpoint)."""
 
-    def __init__(self, model_key: str):
+    def __init__(self, model_key: str, api_key: Optional[str] = None):
         """
         Initialize Groq client.
         
@@ -357,7 +365,7 @@ class GroqClient:
             model_key: The Groq model ID (e.g., "llama3-8b-8192", "mixtral-8x7b-32768")
         """
         settings = get_settings()
-        self.api_key = getattr(settings, 'groq_api_key', None)
+        self.api_key = api_key if api_key is not None else getattr(settings, 'groq_api_key', None)
         self.base_url = "https://api.groq.com/openai/v1"
         self.model_key = model_key
         self.client = httpx.AsyncClient(timeout=60.0)
@@ -465,7 +473,7 @@ class GroqClient:
 class OpenRouterClient:
     """Client for OpenRouter API (OpenAI-compatible endpoint with free-tier models)."""
 
-    def __init__(self, model_key: str):
+    def __init__(self, model_key: str, api_key: Optional[str] = None):
         """
         Initialize OpenRouter client.
         
@@ -473,7 +481,7 @@ class OpenRouterClient:
             model_key: The OpenRouter model ID (e.g., "meta-llama/llama-3.2-3b-instruct:free")
         """
         settings = get_settings()
-        self.api_key = getattr(settings, 'openrouter_api_key', None)
+        self.api_key = api_key if api_key is not None else getattr(settings, 'openrouter_api_key', None)
         self.base_url = "https://openrouter.ai/api/v1"
         self.model_key = model_key
         self.http_referer = getattr(settings, 'openrouter_http_referer', "http://localhost")
@@ -605,19 +613,94 @@ _openrouter_clients: Dict[str, OpenRouterClient] = {}
 _groq_clients: Dict[str, GroqClient] = {}
 
 
-async def get_deepseek_client() -> DeepSeekClient:
+@dataclass
+class ClientCacheEntry:
+    api_key: str
+    client: Any
+
+
+_key_instance_clients: Dict[Tuple[str, str, str], ClientCacheEntry] = {}
+_key_instance_clients_lock = asyncio.Lock()
+
+
+def _build_client_for_provider(provider: str, api_key: str, model_id: str) -> Any:
+    provider_key = provider.value if hasattr(provider, "value") else str(provider)
+    provider_lower = provider_key.lower()
+    if provider_lower == "deepseek":
+        return DeepSeekClient(api_key=api_key, model_id=model_id)
+    if provider_lower == "anthropic":
+        return AnthropicClient(api_key=api_key, model_id=model_id)
+    if provider_lower == "gemini":
+        return GeminiClient(api_key=api_key, model_id=model_id)
+    if provider_lower == "openrouter":
+        return OpenRouterClient(model_id, api_key=api_key)
+    if provider_lower == "groq":
+        return GroqClient(model_id, api_key=api_key)
+    raise LLMClientError(f"Unsupported provider for client creation: {provider}")
+
+
+async def get_client_for_key_instance(
+    provider: str,
+    model_id: str,
+    api_key: str,
+    key_instance_id: str,
+) -> Any:
+    """
+    Get or create a client for a specific key instance.
+    Replaces cached clients when key material changes (rotation).
+    """
+    cache_key = (provider, model_id, key_instance_id)
+
+    async with _key_instance_clients_lock:
+        entry = _key_instance_clients.get(cache_key)
+        if entry and entry.api_key == api_key:
+            return entry.client
+        old_client = entry.client if entry else None
+
+    if old_client and hasattr(old_client, "close"):
+        try:
+            await old_client.close()
+        except Exception:
+            logger.debug("Failed to close rotated client for %s", cache_key)
+
+    client = _build_client_for_provider(provider, api_key, model_id)
+
+    async with _key_instance_clients_lock:
+        _key_instance_clients[cache_key] = ClientCacheEntry(
+            api_key=api_key,
+            client=client,
+        )
+
+    return client
+
+
+async def get_deepseek_client(
+    api_key: Optional[str] = None,
+    model_id: Optional[str] = None,
+) -> DeepSeekClient:
     """Get or create the DeepSeek client instance."""
     global _deepseek_client
     if _deepseek_client is None:
-        _deepseek_client = DeepSeekClient()
+        settings = get_settings()
+        _deepseek_client = DeepSeekClient(
+            api_key=api_key or settings.deepseek_api_key,
+            model_id=model_id or settings.weak_model_id,
+        )
     return _deepseek_client
 
 
-async def get_anthropic_client() -> AnthropicClient:
+async def get_anthropic_client(
+    api_key: Optional[str] = None,
+    model_id: Optional[str] = None,
+) -> AnthropicClient:
     """Get or create the Anthropic client instance."""
     global _anthropic_client
     if _anthropic_client is None:
-        _anthropic_client = AnthropicClient()
+        settings = get_settings()
+        _anthropic_client = AnthropicClient(
+            api_key=api_key or settings.anthropic_api_key,
+            model_id=model_id or settings.strong_model_id,
+        )
     return _anthropic_client
 
 
@@ -678,7 +761,7 @@ async def get_gemini_client(model_key: str) -> 'GeminiClient':
     return _gemini_clients[model_key]
 
 
-async def get_openrouter_client(model_key: str) -> OpenRouterClient:
+async def get_openrouter_client(model_key: str, api_key: Optional[str] = None) -> OpenRouterClient:
     """
     Get or create an OpenRouter client instance for the given model.
     
@@ -690,11 +773,11 @@ async def get_openrouter_client(model_key: str) -> OpenRouterClient:
     """
     global _openrouter_clients
     if model_key not in _openrouter_clients:
-        _openrouter_clients[model_key] = OpenRouterClient(model_key)
+        _openrouter_clients[model_key] = OpenRouterClient(model_key, api_key=api_key)
     return _openrouter_clients[model_key]
 
 
-async def get_groq_client(model_key: str) -> GroqClient:
+async def get_groq_client(model_key: str, api_key: Optional[str] = None) -> GroqClient:
     """
     Get or create a Groq client instance for the given model.
     
@@ -706,13 +789,13 @@ async def get_groq_client(model_key: str) -> GroqClient:
     """
     global _groq_clients
     if model_key not in _groq_clients:
-        _groq_clients[model_key] = GroqClient(model_key)
+        _groq_clients[model_key] = GroqClient(model_key, api_key=api_key)
     return _groq_clients[model_key]
 
 
 async def close_clients():
     """Close all client connections."""
-    global _deepseek_client, _anthropic_client, _gemini_backup1_client, _gemini_backup2_client, _gemini_flash_latest_client, _gemini_clients, _openrouter_clients, _groq_clients
+    global _deepseek_client, _anthropic_client, _gemini_backup1_client, _gemini_backup2_client, _gemini_flash_latest_client, _gemini_clients, _openrouter_clients, _groq_clients, _key_instance_clients
     if _deepseek_client:
         await _deepseek_client.close()
         _deepseek_client = None
@@ -737,3 +820,7 @@ async def close_clients():
     for client in _groq_clients.values():
         await client.close()
     _groq_clients = {}
+    for entry in _key_instance_clients.values():
+        if hasattr(entry.client, "close"):
+            await entry.client.close()
+    _key_instance_clients = {}

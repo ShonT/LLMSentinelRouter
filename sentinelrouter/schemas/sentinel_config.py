@@ -51,6 +51,17 @@ class KeyInstance(BaseModel):
         ...,
         description="Reference to a key ID in the keys dictionary.",
     )
+
+    priority: int = Field(
+        0,
+        ge=0,
+        description="Priority order for this key instance (lower is higher priority).",
+    )
+    
+    enabled: bool = Field(
+        True,
+        description="Whether this key instance can be used for routing.",
+    )
     
     description: Optional[str] = Field(
         None,
@@ -111,7 +122,7 @@ class Limits(BaseModel):
 class ModelDefinition(BaseModel):
     """
     A concrete executable model definition.
-    A model is uniquely identified by (provider, model_id, key_instance).
+    A model is uniquely identified by (provider, model_id, key_instance[s]).
     """
     enabled: bool = Field(
         True,
@@ -132,9 +143,20 @@ class ModelDefinition(BaseModel):
         description="Provider-specific model identifier.",
     )
 
-    key_instance: str = Field(
-        ...,
-        description="Key instance used to authenticate requests for this model.",
+    key_instance: Optional[str] = Field(
+        None,
+        description=(
+            "Single key instance used to authenticate requests for this model. "
+            "Deprecated in favor of key_instances for priority-based failover."
+        ),
+    )
+    
+    key_instances: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Ordered list of key instances for priority-based selection and failover. "
+            "If omitted, key_instance is used."
+        ),
     )
 
     pricing: Pricing = Field(
@@ -306,18 +328,44 @@ class SentinelConfig(BaseModel):
         # 2. Validate Model → KeyInstance references and provider type safety
         # ------------------------------------------------------------------
         for model_id, model in self.models.items():
-            if model.key_instance not in self.key_instances:
+            if model.key_instances:
+                instance_ids = model.key_instances
+            elif model.key_instance:
+                instance_ids = [model.key_instance]
+                model.key_instances = instance_ids
+            else:
                 raise ValueError(
-                    f"Model '{model_id}' refers to missing key_instance '{model.key_instance}'"
+                    f"Model '{model_id}' must define key_instance or key_instances"
                 )
 
-            key_ref = self.key_instances[model.key_instance].key_ref
-            key_type = self.keys[key_ref].type
-
-            if model.provider != key_type:
+            if len(set(instance_ids)) != len(instance_ids):
                 raise ValueError(
-                    f"Model '{model_id}' provider '{model.provider}' does not match "
-                    f"key '{key_ref}' provider '{key_type}'"
+                    f"Model '{model_id}' has duplicate key_instances: {instance_ids}"
+                )
+
+            enabled_instances = 0
+            for instance_id in instance_ids:
+                if instance_id not in self.key_instances:
+                    raise ValueError(
+                        f"Model '{model_id}' refers to missing key_instance '{instance_id}'"
+                    )
+
+                instance = self.key_instances[instance_id]
+                if instance.enabled:
+                    enabled_instances += 1
+
+                key_ref = instance.key_ref
+                key_type = self.keys[key_ref].type
+
+                if model.provider != key_type:
+                    raise ValueError(
+                        f"Model '{model_id}' provider '{model.provider}' does not match "
+                        f"key '{key_ref}' provider '{key_type}'"
+                    )
+
+            if model.enabled and enabled_instances == 0:
+                raise ValueError(
+                    f"Model '{model_id}' has no enabled key_instances"
                 )
 
         # ------------------------------------------------------------------

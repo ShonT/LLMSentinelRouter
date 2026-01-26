@@ -20,14 +20,14 @@ python scripts/test_sentinel_config.py
     "key_id": {"type": "groq|deepseek|anthropic|gemini|openrouter", "value": "API_KEY"}
   },
   "key_instances": {
-    "instance_name": {"key_ref": "key_id", "description": "Optional"}
+    "instance_name": {"key_ref": "key_id", "priority": 0, "enabled": true}
   },
   "models": {
     "model_name": {
       "enabled": true,
       "provider": "groq",
       "model_id": "provider_model_id",
-      "key_instance": "instance_name",
+      "key_instances": ["instance_name"],
       "display_name": "Display Name",
       "pricing": {"input_cost_per_m": 0.0, "output_cost_per_m": 0.0},
       "limits": {
@@ -55,6 +55,10 @@ python scripts/test_sentinel_config.py
 }
 ```
 
+Notes:
+- Use `key_instances` (ordered list) for priority-based selection and failover.
+- `key_instance` is still accepted for single-key models.
+
 ## Validation Rules
 
 | Rule | Requirement |
@@ -62,6 +66,7 @@ python scripts/test_sentinel_config.py
 | Keys | All key_instances must reference existing keys |
 | Models | All models must reference existing key_instances |
 | Provider Match | Model provider must match key provider type |
+| Key Instances | Enabled models must have at least one enabled key instance |
 | Tier Models | Must exist and be enabled |
 | Tier Overlap | Models cannot be in both weak and strong tiers |
 | Empty Tiers | Both weak and strong tiers must have at least one model |

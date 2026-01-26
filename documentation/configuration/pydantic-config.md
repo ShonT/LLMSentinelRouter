@@ -30,17 +30,19 @@ API credentials for each provider:
 
 ### Key Instances
 
-Named references to keys, allowing multiple instances per provider:
+Named references to keys, allowing multiple instances per provider with priority:
 
 ```json
 {
   "key_instances": {
     "groq_primary": {
       "key_ref": "groq_key_1",
+      "priority": 0,
       "description": "Primary Groq API key for fast inference"
     },
     "groq_backup": {
       "key_ref": "groq_key_2",
+      "priority": 1,
       "description": "Backup Groq key for failover"
     }
   }
@@ -58,7 +60,7 @@ Model definitions with pricing and limits:
       "enabled": true,
       "provider": "groq",
       "model_id": "llama-3.1-8b-instant",
-      "key_instance": "groq_primary",
+      "key_instances": ["groq_primary", "groq_backup"],
       "display_name": "Llama 3.1 8B Instant (Groq)",
       "pricing": {
         "input_cost_per_m": 0.05,
@@ -75,6 +77,7 @@ Model definitions with pricing and limits:
 ```
 
 **Important**: The `enabled` field allows you to disable models without deleting their configuration. Disabled models cannot be used in routing or judge configurations.
+**Failover**: `key_instances` are tried in priority order. If a key instance fails, the router tries the next key instance before falling back to another model.
 
 ### Routing Policy
 
@@ -148,14 +151,31 @@ except ValueError as e:
     print(f"❌ Configuration error: {e}")
 ```
 
+## Runtime Reload & Key Rotation
+
+SentinelRouter reloads `sentinel_config.json` when the file changes. This enables:
+
+- **Key rotation without restart**: Update the key value in `keys` and save the file.
+- **Priority-based failover**: Multiple `key_instances` are tried in order until one succeeds.
+
+## Legacy Compatibility
+
+During migration, `config/models_config.json` continues to work:
+
+- If `sentinel_config.json` is present, it is the primary source of routing and client creation.
+- If `sentinel_config.json` is missing, SentinelRouter builds a runtime config from `models_config.json` and environment variables.
+- Legacy configs use a single key instance per provider and rely on environment variables for key values.
+
 ## Complete Validation Checklist
 
 ### ✅ Key Management
 - [x] All `key_instances` reference existing `keys`
 - [x] Key types match provider types
+- [x] Key instances can be prioritized and disabled
 
 ### ✅ Model Configuration  
 - [x] All models reference existing `key_instances`
+- [x] Enabled models have at least one enabled key instance
 - [x] Model provider matches key provider type
 - [x] All pricing and limits are specified
 - [x] Disabled models have `enabled: false`

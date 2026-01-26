@@ -7,9 +7,17 @@
       "type": "groq",
       "value": "${GROQ_API_KEY}"
     },
+    "groq_key_2": {
+      "type": "groq",
+      "value": "${GROQ_API_KEY_BACKUP}"
+    },
     "deepseek_key_1": {
       "type": "deepseek",
       "value": "${DEEPSEEK_API_KEY}"
+    },
+    "deepseek_key_2": {
+      "type": "deepseek",
+      "value": "${DEEPSEEK_API_KEY_BACKUP}"
     },
     "anthropic_key_1": {
       "type": "anthropic",
@@ -24,18 +32,32 @@
   "key_instances": {
     "groq_primary": {
       "key_ref": "groq_key_1",
+      "priority": 0,
       "description": "Primary Groq API key for fast inference"
+    },
+    "groq_backup": {
+      "key_ref": "groq_key_2",
+      "priority": 1,
+      "description": "Backup Groq API key for failover"
     },
     "deepseek_primary": {
       "key_ref": "deepseek_key_1",
+      "priority": 0,
       "description": "Primary DeepSeek API key"
+    },
+    "deepseek_backup": {
+      "key_ref": "deepseek_key_2",
+      "priority": 1,
+      "description": "Backup DeepSeek API key"
     },
     "anthropic_primary": {
       "key_ref": "anthropic_key_1",
+      "priority": 0,
       "description": "Primary Anthropic API key for Claude models"
     },
     "gemini_backup": {
       "key_ref": "gemini_key_1",
+      "priority": 0,
       "description": "Gemini backup for judge system"
     }
   },
@@ -45,7 +67,7 @@
       "enabled": true,
       "provider": "groq",
       "model_id": "llama-3.1-8b-instant",
-      "key_instance": "groq_primary",
+      "key_instances": ["groq_primary", "groq_backup"],
       "display_name": "Llama 3.1 8B Instant (Groq)",
       "pricing": {
         "input_cost_per_m": 0.05,
@@ -61,7 +83,7 @@
       "enabled": true,
       "provider": "deepseek",
       "model_id": "deepseek-chat",
-      "key_instance": "deepseek_primary",
+      "key_instances": ["deepseek_primary", "deepseek_backup"],
       "display_name": "DeepSeek Chat",
       "pricing": {
         "input_cost_per_m": 0.14,

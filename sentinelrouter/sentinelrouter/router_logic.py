@@ -9,7 +9,6 @@ import time
 from collections import OrderedDict
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
-from functools import partial
 
 from sqlalchemy.orm import Session as DBSession
 
@@ -17,20 +16,9 @@ from .budget import BudgetKillSwitch
 from .judge import StingyJudge, complexity_to_route
 from .threshold import DynamicThreshold
 from .cycle_detector import CycleDetector
-from .clients import (
-    get_deepseek_client, 
-    get_anthropic_client, 
-    get_gemini_backup1_client,
-    get_gemini_backup2_client,
-    get_gemini_flash_latest_client,
-    get_gemini_client,
-    get_openrouter_client,
-    get_groq_client,
-    LLMResponse, 
-    LLMClientError
-)
+from .clients import get_client_for_key_instance, LLMResponse, LLMClientError
 from .logging_audit import LoggingAudit
-from .config import get_settings
+from .config import get_settings, get_runtime_config_with_meta
 from .database import get_db
 from .models import RoutingDecision
 from .metrics import get_metrics_collector
@@ -39,6 +27,7 @@ from .state_manager import get_state_manager
 from .semantic_cache import SemanticCache
 from .rate_limiter import get_rate_limiter
 from .redaction import RedactionEngine, RedactionMode, HMACMasking, SimpleMasking
+from .model_registry import KeyInstancePool, KeyInstanceRecord
 
 logger = logging.getLogger(__name__)
 metrics = get_metrics_collector()
@@ -99,6 +88,7 @@ class Router:
         self.semantic_cache = SemanticCache(db_session)
         self.judge = None  # Will be initialized with state_manager
         self.redaction_engine = self._init_redaction_engine()
+        self.key_instance_pool = KeyInstancePool()
 
     async def _ensure_state_manager(self):
         if self.state_manager is None:
@@ -143,6 +133,58 @@ class Router:
         logger.info(f"Redaction engine initialized: {engine.get_stats()}")
         return engine
 
+    def _get_candidate_models(self, runtime_config, priority_group: str):
+        """Return ordered candidate models from the runtime config."""
+        if priority_group == "strong_tier":
+            order_list = runtime_config.routing_policy.strong_tier.order
+        else:
+            order_list = runtime_config.routing_policy.weak_tier.order
+
+        candidates = []
+        for model_id in order_list:
+            model_def = runtime_config.models.get(model_id)
+            if model_def and model_def.enabled:
+                candidates.append((model_id, model_def))
+
+        if not candidates:
+            for model_id, model_def in runtime_config.models.items():
+                if model_def.enabled:
+                    candidates.append((model_id, model_def))
+        return candidates
+
+    def _get_key_instances_for_model(self, runtime_config, model_def):
+        """Return key instances ordered by priority for a model."""
+        instance_ids = []
+        if model_def.key_instances:
+            instance_ids = list(model_def.key_instances)
+        elif model_def.key_instance:
+            instance_ids = [model_def.key_instance]
+
+        if not instance_ids:
+            for instance_id, instance in runtime_config.key_instances.items():
+                key = runtime_config.keys.get(instance.key_ref)
+                if key and key.type == model_def.provider:
+                    instance_ids.append(instance_id)
+
+        records = []
+        for instance_id in instance_ids:
+            instance = runtime_config.key_instances.get(instance_id)
+            if not instance or not instance.enabled:
+                continue
+            key = runtime_config.keys.get(instance.key_ref)
+            if not key or not key.value:
+                continue
+            records.append(
+                KeyInstanceRecord(
+                    instance_id=instance_id,
+                    api_key=key.value,
+                    priority=instance.priority,
+                    enabled=instance.enabled,
+                )
+            )
+
+        return self.key_instance_pool.order_instances(records)
+
     async def route(
         self,
         session_id: str,
@@ -168,6 +210,9 @@ class Router:
         """
         route_start = time.time()
         await self._ensure_state_manager()
+        runtime_config, runtime_changed = get_runtime_config_with_meta()
+        if runtime_changed:
+            self.state_manager = await get_state_manager(reload=True)
         request_id = request_id or str(uuid.uuid4())
         logger.info(f"Processing request {request_id} for session {session_id}")
         
@@ -332,47 +377,10 @@ class Router:
         else:
             priority_group = "strong_tier"
 
-        # Get candidate models from StateManager with new config
-        all_models = await self.state_manager.get_all_models()
-        routing_order_config = await self.state_manager.get_routing_order_config()
-        
-        candidate_models = []
-        # Determine which list to use based on priority_group
-        order_list = None
-        if priority_group == "strong_tier":
-            order_list = routing_order_config.strong_models
-        else:
-            order_list = routing_order_config.weak_models
-        
-        if order_list:
-            # Use the order list to sort models; exclude models not in list
-            for model_id in order_list:
-                if model_id in all_models:
-                    model_config = all_models[model_id]
-                    # Check priority_group matches? Maybe not required if list is specific.
-                    # But we can still enforce priority_group consistency.
-                    if model_config.routing.priority_group == priority_group:
-                        candidate_models.append((model_id, model_config))
-        else:
-            # Fallback to old logic
-            for model_id, model_config in all_models.items():
-                if (model_config.routing.priority_group == priority_group and
-                    model_config.status == "ACTIVE"):
-                    candidate_models.append((model_id, model_config))
-            # Sort by order
-            candidate_models.sort(key=lambda x: x[1].routing.order)
+        candidate_models = self._get_candidate_models(runtime_config, priority_group)
         
         if not candidate_models:
             raise LLMClientError(f"No active models in priority group {priority_group}")
-
-        # Map model_id to client getter
-        client_getters = {
-            "deepseek-reasoner": get_deepseek_client,
-            "claude-3-opus-20240229": get_anthropic_client,
-            "gemini-2.5-flash": get_gemini_backup1_client,
-            "gemini-2.5-flash-lite": get_gemini_backup2_client,
-            "gemini-flash-latest": get_gemini_flash_latest_client,
-        }
 
         # Set tier variable before entering the loop to avoid UnboundLocalError in exception handler
         tier = "weak" if priority_group == "fast_tier" else "strong"
@@ -383,27 +391,8 @@ class Router:
         cost_source = "unknown"
         computed_cost = None
 
-        for model_id, model_config in candidate_models:
-            # Check if this is an OpenRouter model (provider == "openrouter")
-            # If so, create a client getter dynamically using partial for proper closure
-            if model_config.provider == "openrouter":
-                # For OpenRouter models, we need to pass the model_key to the client
-                # Use partial instead of lambda to ensure proper closure capture
-                client_getter = partial(get_openrouter_client, model_config.model_key)
-            elif model_config.provider == "groq":
-                # For Groq models, pass the model_key to the client
-                # Use partial instead of lambda to ensure proper closure capture
-                client_getter = partial(get_groq_client, model_config.model_key)
-            elif model_config.provider == "gemini":
-                # For Gemini models, pass the model_key to the generic client
-                # Use partial instead of lambda to ensure proper closure capture
-                client_getter = partial(get_gemini_client, model_config.model_key)
-            else:
-                # Use the static mapping for other providers
-                client_getter = client_getters.get(model_id)
-                if client_getter is None:
-                    logger.warning(f"No client getter for model {model_id}")
-                    continue
+        for model_id, model_def in candidate_models:
+            legacy_model_config = await self.state_manager.get_model_config(model_id)
             # Check throttle ban
             if throttle_manager.is_banned(model_id):
                 ban_info = throttle_manager.get_ban_info(model_id)
@@ -421,19 +410,22 @@ class Router:
                 continue
 
             # Check tier-based rate limits with accurate time-windowed tracking
-            if model_config.limits:
-                # Get session tier to determine which limits to use
-                session_obj = self.budget.get_or_create_session(session_id)
-                session_tier = getattr(session_obj, 'tier', 'free')
-                
+            active_limits = None
+            session_obj = self.budget.get_or_create_session(session_id)
+            session_tier = getattr(session_obj, 'tier', 'free')
+            if legacy_model_config and legacy_model_config.limits:
                 # Select appropriate limits based on tier
-                if session_tier == 'free' and model_config.free_tier_limits:
-                    active_limits = model_config.free_tier_limits
-                elif session_tier in ('paid', 'premium') and model_config.paid_tier_limits:
-                    active_limits = model_config.paid_tier_limits
+                if session_tier == 'free' and legacy_model_config.free_tier_limits:
+                    active_limits = legacy_model_config.free_tier_limits
+                elif session_tier in ('paid', 'premium') and legacy_model_config.paid_tier_limits:
+                    active_limits = legacy_model_config.paid_tier_limits
                 else:
                     # Fallback to old limits field
-                    active_limits = model_config.limits
+                    active_limits = legacy_model_config.limits
+            else:
+                active_limits = model_def.limits
+
+            if active_limits:
                 
                 # Estimate tokens for this request (rough estimate based on prompt length)
                 estimated_tokens = len(prompt.split()) * 2  # ~2 tokens per word average
@@ -471,75 +463,112 @@ class Router:
                     )
 
             try:
-                client = await client_getter()
-                
-                # For OpenRouter clients, check if API key is configured
-                if hasattr(client, 'is_available') and not client.is_available():
-                    logger.warning(f"OpenRouter model {model_id} unavailable (missing API key), skipping")
-                    continue
-                
-                model_used = model_id
-                logger.debug(f"Trying model: {model_id}")
+                key_instances = self._get_key_instances_for_model(runtime_config, model_def)
+                if not key_instances:
+                    raise LLMClientError(f"No enabled key instances for model {model_id}")
 
-                # Track latency with timeout check for conditional judge mode
-                start_time = time.time()
-                
-                # In conditional mode, if this is a weak model attempt and judge was skipped,
-                # check if it takes >15s and escalate to judge + strong model if needed
-                if use_judge is None and judge_skipped and priority_group == "fast_tier":
-                    # Conditional mode: start weak model call with timeout monitoring
+                last_error = None
+
+                for key_instance in key_instances:
                     try:
-                        # Use asyncio.wait_for with 15s timeout
-                        response = await asyncio.wait_for(
-                            client.chat_completion(messages),
-                            timeout=150.0
+                        client = await get_client_for_key_instance(
+                            provider=model_def.provider.value,
+                            model_id=model_def.model_id,
+                            api_key=key_instance.api_key,
+                            key_instance_id=key_instance.instance_id,
                         )
-                        latency_ms = (time.time() - start_time) * 1000
-                        logger.info(f"Weak model completed in {latency_ms:.0f}ms (under 15s threshold)")
-                    except asyncio.TimeoutError:
-                        # Weak model is taking too long - call judge and potentially escalate
-                        logger.warning(f"Weak model exceeded 15s timeout - calling judge for escalation check")
-                        metrics.record_judge_timeout_escalation(session_id, model_id, 15000)
                         
-                        # Call judge now
-                        try:
-                            judge_start = time.time()
-                            complexity_score, impact_scope, reasoning = await self.judge.judge(prompt)
-                            judge_latency_ms = (time.time() - judge_start) * 1000
-                            judge_skipped = False
-                            logger.info(
-                                f"Post-timeout judge: complexity={complexity_score:.3f}, impact={impact_scope}"
+                        # For OpenRouter/Groq clients, check if API key is configured
+                        if hasattr(client, 'is_available') and not client.is_available():
+                            logger.warning(
+                                f"Model {model_id} unavailable (missing API key), "
+                                f"skipping key instance {key_instance.instance_id}"
                             )
-                        except Exception as e:
-                            logger.error(f"Post-timeout judge failed: {e}. Using default.")
-                            complexity_score, impact_scope, reasoning = 0.5, "MEDIUM", "Post-timeout judge failed"
+                            continue
                         
-                        # Re-evaluate routing decision
-                        threshold = self.threshold.get_threshold()
-                        strict_mode = self.threshold.is_strict_mode()
-                        new_route_decision = self._decide_route(
-                            complexity_score,
-                            impact_scope,
-                            threshold,
-                            strict_mode,
-                            cycle_detected,
+                        model_used = model_id
+                        logger.debug(
+                            f"Trying model: {model_id} with key instance {key_instance.instance_id}"
                         )
+
+                        # Track latency with timeout check for conditional judge mode
+                        start_time = time.time()
                         
-                        if new_route_decision == "strong":
-                            # Cancel weak model (already timed out) and escalate to strong model
-                            logger.info(f"Escalating to strong model due to timeout + judge recommendation")
-                            # Break from weak model loop and restart with strong models
-                            # We'll do this by raising a special exception and catching it
-                            raise TimeoutError("Weak model timeout - escalating to strong model")
+                        # In conditional mode, if this is a weak model attempt and judge was skipped,
+                        # check if it takes >15s and escalate to judge + strong model if needed
+                        if use_judge is None and judge_skipped and priority_group == "fast_tier":
+                            # Conditional mode: start weak model call with timeout monitoring
+                            try:
+                                # Use asyncio.wait_for with 15s timeout
+                                response = await asyncio.wait_for(
+                                    client.chat_completion(messages),
+                                    timeout=150.0
+                                )
+                                latency_ms = (time.time() - start_time) * 1000
+                                logger.info(
+                                    f"Weak model completed in {latency_ms:.0f}ms (under 15s threshold)"
+                                )
+                            except asyncio.TimeoutError:
+                                # Weak model is taking too long - call judge and potentially escalate
+                                logger.warning(
+                                    "Weak model exceeded 15s timeout - calling judge for escalation check"
+                                )
+                                metrics.record_judge_timeout_escalation(session_id, model_id, 15000)
+                                
+                                # Call judge now
+                                try:
+                                    judge_start = time.time()
+                                    complexity_score, impact_scope, reasoning = await self.judge.judge(prompt)
+                                    judge_latency_ms = (time.time() - judge_start) * 1000
+                                    judge_skipped = False
+                                    logger.info(
+                                        f"Post-timeout judge: complexity={complexity_score:.3f}, impact={impact_scope}"
+                                    )
+                                except Exception as e:
+                                    logger.error(f"Post-timeout judge failed: {e}. Using default.")
+                                    complexity_score, impact_scope, reasoning = 0.5, "MEDIUM", "Post-timeout judge failed"
+                                
+                                # Re-evaluate routing decision
+                                threshold = self.threshold.get_threshold()
+                                strict_mode = self.threshold.is_strict_mode()
+                                new_route_decision = self._decide_route(
+                                    complexity_score,
+                                    impact_scope,
+                                    threshold,
+                                    strict_mode,
+                                    cycle_detected,
+                                )
+                                
+                                if new_route_decision == "strong":
+                                    # Cancel weak model (already timed out) and escalate to strong model
+                                    logger.info("Escalating to strong model due to timeout + judge recommendation")
+                                    # Break from weak model loop and restart with strong models
+                                    # We'll do this by raising a special exception and catching it
+                                    raise TimeoutError("Weak model timeout - escalating to strong model")
+                                else:
+                                    # Judge says weak is fine - wait for weak model to complete (no timeout this time)
+                                    logger.info("Judge says weak model is sufficient - waiting for completion")
+                                    response = await client.chat_completion(messages)
+                                    latency_ms = (time.time() - start_time) * 1000
                         else:
-                            # Judge says weak is fine - wait for weak model to complete (no timeout this time)
-                            logger.info(f"Judge says weak model is sufficient - waiting for completion")
+                            # Normal mode: no timeout monitoring
                             response = await client.chat_completion(messages)
                             latency_ms = (time.time() - start_time) * 1000
-                else:
-                    # Normal mode: no timeout monitoring
-                    response = await client.chat_completion(messages)
-                    latency_ms = (time.time() - start_time) * 1000
+
+                        self.key_instance_pool.record_success(key_instance.instance_id)
+                        break
+                    except LLMClientError as e:
+                        last_error = e
+                        self.key_instance_pool.record_failure(key_instance.instance_id)
+                        logger.warning(
+                            f"Key instance {key_instance.instance_id} failed for {model_id}: {e}"
+                        )
+                        continue
+
+                if response is None:
+                    raise LLMClientError(
+                        f"All key instances failed for model {model_id}"
+                    ) from last_error
 
                 # Record metrics (tier is already set before the loop)
                 metrics.record_model_latency(model_id, tier, latency_ms, "success")
@@ -568,34 +597,42 @@ class Router:
                     total_tokens = response.usage.get('total_tokens', 0)
                     
                     # Compute fallback cost if we don't have provider cost
-                    if cost_source == "unknown" and model_config.pricing:
-                        if model_config.pricing.usage_tiers:
+                    if cost_source == "unknown" and legacy_model_config and legacy_model_config.pricing:
+                        if legacy_model_config.pricing.usage_tiers:
                             # Use tiered pricing
                             current_requests = model_state.requests_today if model_state else 0
-                            computed_cost = model_config.pricing.calculate_cost(
+                            computed_cost = legacy_model_config.pricing.calculate_cost(
                                 input_tokens, output_tokens, current_requests
                             )
                         else:
                             # Use flat rate pricing
                             computed_cost = (
-                                (input_tokens / 1_000_000) * model_config.pricing.input_cost_per_m +
-                                (output_tokens / 1_000_000) * model_config.pricing.output_cost_per_m
+                                (input_tokens / 1_000_000) * legacy_model_config.pricing.input_cost_per_m +
+                                (output_tokens / 1_000_000) * legacy_model_config.pricing.output_cost_per_m
                             )
                         
                         if computed_cost and computed_cost > 0:
                             final_cost = computed_cost
                             cost_source = "computed"
-                    elif cost_source == "provider" and model_config.pricing:
+                    elif cost_source == "unknown" and model_def.pricing:
+                        computed_cost = (
+                            (input_tokens / 1_000_000) * model_def.pricing.input_cost_per_m +
+                            (output_tokens / 1_000_000) * model_def.pricing.output_cost_per_m
+                        )
+                        if computed_cost and computed_cost > 0:
+                            final_cost = computed_cost
+                            cost_source = "computed"
+                    elif cost_source == "provider" and legacy_model_config and legacy_model_config.pricing:
                         # Keep computed_cost for audit even if we're using provider cost
-                        if model_config.pricing.usage_tiers:
+                        if legacy_model_config.pricing.usage_tiers:
                             current_requests = model_state.requests_today if model_state else 0
-                            computed_cost = model_config.pricing.calculate_cost(
+                            computed_cost = legacy_model_config.pricing.calculate_cost(
                                 input_tokens, output_tokens, current_requests
                             )
                         else:
                             computed_cost = (
-                                (input_tokens / 1_000_000) * model_config.pricing.input_cost_per_m +
-                                (output_tokens / 1_000_000) * model_config.pricing.output_cost_per_m
+                                (input_tokens / 1_000_000) * legacy_model_config.pricing.input_cost_per_m +
+                                (output_tokens / 1_000_000) * legacy_model_config.pricing.output_cost_per_m
                             )
                     
                     # Calculate tokens per second
@@ -643,25 +680,7 @@ class Router:
                     decision_reason = "Weak model exceeded 15s timeout and judge recommended strong model"
                     
                     # Recalculate candidate models for strong tier
-                    all_models = await self.state_manager.get_all_models()
-                    routing_order_config = await self.state_manager.get_routing_order_config()
-                    
-                    candidate_models = []
-                    order_list = routing_order_config.strong_models
-                    
-                    if order_list:
-                        for model_id_strong in order_list:
-                            if model_id_strong in all_models:
-                                model_config_strong = all_models[model_id_strong]
-                                if model_config_strong.routing.priority_group == "strong_tier":
-                                    candidate_models.append((model_id_strong, model_config_strong))
-                    else:
-                        # Fallback to old logic
-                        for model_id_strong, model_config_strong in all_models.items():
-                            if (model_config_strong.routing.priority_group == "strong_tier" and
-                                model_config_strong.status == "ACTIVE"):
-                                candidate_models.append((model_id_strong, model_config_strong))
-                        candidate_models.sort(key=lambda x: x[1].routing.order)
+                    candidate_models = self._get_candidate_models(runtime_config, "strong_tier")
                     
                     if not candidate_models:
                         raise LLMClientError("No active models in strong_tier after timeout escalation")
@@ -715,7 +734,7 @@ class Router:
                 # Record failed attempt
                 metrics.record_model_latency(model_id, tier, 0, "error")
                 logger.warning(f"Model {model_id} failed: {e}")
-                if (model_id, model_config) == candidate_models[-1]:
+                if model_id == candidate_models[-1][0]:
                     logger.error(f"All models in {priority_group} failed!")
                     raise LLMClientError(f"All models in {priority_group} unavailable: {e}")
                 logger.info(f"Falling back to next model in {priority_group}...")
@@ -1108,9 +1127,8 @@ async def _demo_router_flow():
     mock_client = AsyncMock()
     mock_client.chat_completion = AsyncMock(return_value=mock_response)
 
-    # Patch the client getters to return our mock client
-    with patch('__main__.get_deepseek_client', return_value=mock_client), \
-         patch('__main__.get_anthropic_client', return_value=mock_client):
+    # Patch the client getter to return our mock client
+    with patch('__main__.get_client_for_key_instance', return_value=mock_client):
         # 5. Run the router with a simple prompt
         print("=== SentinelRouter Demo Flow ===")
         print("Session: demo-session-001")

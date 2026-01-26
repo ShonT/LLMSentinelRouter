@@ -147,6 +147,40 @@ class ProviderHealthTracker:
         }
 
 
+@dataclass
+class KeyInstanceRecord:
+    """Represents a key instance for a provider with priority metadata."""
+    instance_id: str
+    api_key: str
+    priority: int
+    enabled: bool = True
+
+
+class KeyInstancePool:
+    """
+    Tracks key instance health and returns instances ordered by priority.
+    """
+
+    def __init__(self, health_tracker: Optional[ProviderHealthTracker] = None):
+        self.health_tracker = health_tracker or ProviderHealthTracker()
+
+    def order_instances(self, instances: List[KeyInstanceRecord]) -> List[KeyInstanceRecord]:
+        """Return enabled, available instances ordered by priority."""
+        available = [
+            instance for instance in instances
+            if instance.enabled and self.health_tracker.is_available(instance.instance_id)
+        ]
+        return sorted(available, key=lambda inst: inst.priority)
+
+    def record_failure(self, instance_id: str) -> None:
+        """Record a failure for a key instance."""
+        self.health_tracker.record_failure(instance_id)
+
+    def record_success(self, instance_id: str) -> None:
+        """Record a success for a key instance."""
+        self.health_tracker.record_success(instance_id)
+
+
 class ModelRegistry:
     """
     Central registry for all model providers with failover support.
