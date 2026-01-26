@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     gemini_backup1_api_key: str = Field("", env="GEMINI_BACKUP1_API_KEY")
     gemini_backup2_api_key: str = Field("", env="GEMINI_BACKUP2_API_KEY")
 
+    # Optional provider API keys
+    openrouter_api_key: str = Field("", env="OPENROUTER_API_KEY")
+    openrouter_http_referer: str = Field("http://localhost", env="OPENROUTER_HTTP_REFERER")
+    openrouter_app_title: str = Field("LLMSentinelRouter", env="OPENROUTER_APP_TITLE")
+    groq_api_key: str = Field("", env="GROQ_API_KEY")
+
     # Model identifiers (kept for backward compatibility)
     weak_model_id: str = Field("deepseek-chat", env="WEAK_MODEL_ID")
     strong_model_id: str = Field("claude-3-opus-20240229", env="STRONG_MODEL_ID")
@@ -95,6 +101,9 @@ class Settings(BaseSettings):
     enable_budget_killswitch: bool = Field(True, env="ENABLE_BUDGET_KILLSWITCH")
     enable_cycle_detection: bool = Field(True, env="ENABLE_CYCLE_DETECTION")
     enable_dynamic_threshold: bool = Field(True, env="ENABLE_DYNAMIC_THRESHOLD")
+
+    # Gunicorn workers (for production)
+    workers: int = Field(2, env="WORKERS")
 
     # Redaction settings
     redaction_mode: str = Field(

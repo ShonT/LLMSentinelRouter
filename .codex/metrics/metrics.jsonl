@@ -1,0 +1,17 @@
+{
+  "timestamp": "2026-01-26T21:24:24.223642+00:00",
+  "counters": {
+    "issues_claimed_total": 1,
+    "task_specs_generated_total": 1
+  },
+  "gauges": {},
+  "histograms": {
+    "scaffolding_time_seconds{node=senior_engineer}": {
+      "count": 1,
+      "sum": 7.773498058319092,
+      "min": 7.773498058319092,
+      "max": 7.773498058319092,
+      "avg": 7.773498058319092
+    }
+  }
+}

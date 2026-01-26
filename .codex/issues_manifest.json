@@ -1,10 +1,10 @@
 {
   "001-implement-cicd-pipelines": {
-    "attempts": 2,
-    "claimed_at": "2026-01-26T21:22:29.207830Z",
-    "error": null,
-    "started_at": "2026-01-26T21:22:29.209909Z",
-    "status": "executing",
+    "attempts": 3,
+    "claimed_at": "2026-01-26T21:24:09.908235Z",
+    "error": "Received SIGINT - orchestration interrupted by user",
+    "started_at": "2026-01-26T21:24:09.909987Z",
+    "status": "interrupted",
     "success": null,
     "task_id": null
   }

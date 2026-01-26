@@ -1,5 +1,5 @@
 {
-  "created_at": "2026-01-26T21:22:37.698687Z",
+  "created_at": "2026-01-26T21:24:17.682690Z",
   "definition_of_done": [
     "Create .github/workflows/pr-validation.yml with unit tests, integration tests, linting, and type checking",
     "Create .github/workflows/release.yml that builds Docker images on merge to main or tag push",
@@ -22,7 +22,7 @@
     "delta_depth": 0,
     "is_delta_task": false,
     "issue_id": "001",
-    "task_id": "001-1769462549"
+    "task_id": "001-1769462649"
   },
   "non_goals": [
     "Production deployment automation",
@@ -30,7 +30,7 @@
     "Performance testing in CI",
     "Custom Docker registry setup",
     "Database migration automation",
-    "Load testing in staging"
+    "Load testing in pipelines"
   ],
   "required_tests": [
     "PR validation workflow runs on all pull requests",
@@ -41,6 +41,6 @@
     "Staging deployment workflow can be manually triggered",
     "All workflows use GitHub Secrets for sensitive data"
   ],
-  "task_id": "001-1769462549",
+  "task_id": "001-1769462649",
   "test_command": ""
 }
