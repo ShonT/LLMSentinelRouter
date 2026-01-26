@@ -1,7 +1,0 @@
-name: Debug Actions
-on: [push, pull_request]
-jobs:
-  debug:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "Actions are working"
