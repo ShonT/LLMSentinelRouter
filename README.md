@@ -170,6 +170,52 @@ All configuration is done via environment variables. The most important ones are
 
 See [.env.example](.env.example) for a complete list.
 
+## CI/CD
+
+SentinelRouter uses GitHub Actions for PR validation, release builds, and manual staging deployments.
+
+### Workflows
+
+- **PR validation** (`.github/workflows/pr-validation.yml`): Runs on pull requests to `main`. It checks formatting (Black), type checking (mypy), unit tests, and integration tests.
+- **Release build** (`.github/workflows/release.yml`): Runs on pushes to `main` and tag pushes. Builds a Docker image to verify the release is buildable.
+- **Staging deploy** (`.github/workflows/deploy-staging.yml`): Manual workflow for staging deployments.
+
+### Required GitHub Secrets
+
+Add the following repository secrets in **Settings -> Secrets and variables -> Actions**:
+
+**Required for PR validation:**
+- `DEEPSEEK_API_KEY` - DeepSeek API key for weak model
+- `ANTHROPIC_API_KEY` - Anthropic API key for strong model (Claude)
+- `GEMINI_BACKUP1_API_KEY` - Google Gemini API key for judge backup
+- `GEMINI_BACKUP2_API_KEY` - Google Gemini API key for judge backup
+- `GROQ_API_KEY` - Groq API key for alternative models
+- `OPENROUTER_API_KEY` - OpenRouter API key for free-tier models
+
+**Optional for advanced features:**
+- `OPENAI_API_KEY` or `SEMANTIC_API_KEY` - Only needed if using `VECTORDB_API` semantic strategy for cycle detection
+
+**Optional for staging deployment:**
+- `STAGING_HOST` - Staging server hostname
+- `STAGING_USER` - Staging server SSH user
+- `STAGING_SSH_PRIVATE_KEY` - SSH private key for staging deployment
+
+**Optional for Docker registry:**
+- `DOCKER_REGISTRY` - Registry URL (e.g., `ghcr.io`)
+- `DOCKER_REGISTRY_USERNAME` - Registry username
+- `DOCKER_REGISTRY_PASSWORD` - Registry password or token
+
+Integration tests in PR validation require the API keys listed above. For forks, you may need to skip integration tests or add dummy secrets in a forked repo.
+
+### Branch Protection
+
+To require CI to pass before merging:
+
+1. Go to **Settings -> Branches**.
+2. Add a protection rule for `main`.
+3. Enable **Require status checks to pass before merging**.
+4. Select the **PR Validation** workflow as a required check.
+
 ## Supported Providers
 
 SentinelRouter supports multiple LLM providers for flexible routing and cost optimization:
