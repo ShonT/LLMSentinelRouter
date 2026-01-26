@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     strong_model_id: str = Field("claude-3-opus-20240229", env="STRONG_MODEL_ID")
 
     # Budget & routing
-    max_cost_per_session: float = Field(25.0, env="MAX_COST_PER_SESSION")
-    initial_threshold: float = Field(0.9, env="INITIAL_THRESHOLD")
+    max_cost_per_session: float = Field(10.0, env="MAX_COST_PER_SESSION")
+    initial_threshold: float = Field(0.7, env="INITIAL_THRESHOLD")
     escalation_rate_limit: float = Field(0.05, env="ESCALATION_RATE_LIMIT")
 
     # Complexity threshold (for judge)
