@@ -25,7 +25,9 @@ if not api_key:
 if not model_id:
     model_id = os.environ.get("STRONG_MODEL_ID", "claude-opus-4-5-20251101")
 
-print(f"API Key: {api_key[:20] if len(api_key) >= 20 else api_key}...{api_key[-10:] if len(api_key) >= 10 else ''}")
+print(
+    f"API Key: {api_key[:20] if len(api_key) >= 20 else api_key}...{api_key[-10:] if len(api_key) >= 10 else ''}"
+)
 print(f"Model ID: {model_id}")
 
 # Direct API call
@@ -33,15 +35,13 @@ url = "https://api.anthropic.com/v1/messages"
 headers = {
     "x-api-key": api_key,
     "anthropic-version": "2023-06-01",
-    "content-type": "application/json"
+    "content-type": "application/json",
 }
 
 payload = {
     "model": model_id,
     "max_tokens": 100,
-    "messages": [
-        {"role": "user", "content": "Say 'Hello from Anthropic'"}
-    ]
+    "messages": [{"role": "user", "content": "Say 'Hello from Anthropic'"}],
 }
 
 print(f"\nTesting with URL: {url}")
@@ -53,7 +53,7 @@ try:
         response = client.post(url, headers=headers, json=payload)
         print(f"\nStatus Code: {response.status_code}")
         print(f"Response: {response.text}")
-        
+
         if response.status_code == 200:
             data = response.json()
             print(f"\n✅ SUCCESS!")

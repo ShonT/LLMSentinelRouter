@@ -21,19 +21,19 @@ def cache():
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from sentinelrouter.sentinelrouter.models import Base
-    
+
     # Create temporary database
-    fd, db_path = tempfile.mkstemp(suffix='.db')
+    fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    
-    engine = create_engine(f'sqlite:///{db_path}')
+
+    engine = create_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
-    
+
     try:
         yield SemanticCache(
-            session, 
+            session,
             min_samples=3,
             confidence_threshold=0.75,
         )
@@ -48,7 +48,7 @@ def test_cache_recommends_weak_after_weak_history(cache):
     settings = get_settings()
     prompt = "What is 2+2?"
     context = [{"role": "user", "content": "What is 2+2?"}]
-    
+
     # Record 5 weak model interactions
     for i in range(5):
         cache.record_interaction(
@@ -64,11 +64,13 @@ def test_cache_recommends_weak_after_weak_history(cache):
             cost=0.001,
             total_tokens=10,
         )
-    
+
     # Check recommendation
     recommendation = cache.get_recommended_route(prompt, context)
-    assert recommendation == "weak", "Cache should recommend weak model after 5 weak calls"
-    
+    assert (
+        recommendation == "weak"
+    ), "Cache should recommend weak model after 5 weak calls"
+
     # Verify confidence
     confident, confidence = cache.has_confident_history(prompt, context)
     assert confident is True, "Should be confident after 5 consistent calls"
@@ -80,7 +82,7 @@ def test_cache_recommends_strong_after_strong_history(cache):
     settings = get_settings()
     prompt = "Explain quantum mechanics in detail"
     context = [{"role": "user", "content": "Explain quantum mechanics in detail"}]
-    
+
     # Record 4 strong model interactions
     for i in range(4):
         cache.record_interaction(
@@ -96,11 +98,13 @@ def test_cache_recommends_strong_after_strong_history(cache):
             cost=0.05,
             total_tokens=1000,
         )
-    
+
     # Check recommendation
     recommendation = cache.get_recommended_route(prompt, context)
-    assert recommendation == "strong", "Cache should recommend strong model after 4 strong calls"
-    
+    assert (
+        recommendation == "strong"
+    ), "Cache should recommend strong model after 4 strong calls"
+
     # Verify confidence
     confident, confidence = cache.has_confident_history(prompt, context)
     assert confident is True, "Should be confident after 4 consistent calls"
@@ -111,7 +115,7 @@ def test_cache_no_recommendation_with_mixed_history(cache):
     settings = get_settings()
     prompt = "Medium complexity query"
     context = [{"role": "user", "content": "Medium complexity query"}]
-    
+
     # Record mixed interactions (2 weak, 2 strong)
     for i in range(2):
         cache.record_interaction(
@@ -127,7 +131,7 @@ def test_cache_no_recommendation_with_mixed_history(cache):
             cost=0.001,
             total_tokens=10,
         )
-    
+
     for i in range(2):
         cache.record_interaction(
             prompt=prompt,
@@ -142,11 +146,13 @@ def test_cache_no_recommendation_with_mixed_history(cache):
             cost=0.05,
             total_tokens=1000,
         )
-    
+
     # Check recommendation - should be None or at least not confident
     confident, confidence = cache.has_confident_history(prompt, context)
     assert confident is False, "Should not be confident with 50/50 split"
-    assert confidence < 0.75, f"Confidence should be < 0.75 with mixed history, got {confidence}"
+    assert (
+        confidence < 0.75
+    ), f"Confidence should be < 0.75 with mixed history, got {confidence}"
 
 
 def test_cache_no_recommendation_insufficient_samples(cache):
@@ -154,7 +160,7 @@ def test_cache_no_recommendation_insufficient_samples(cache):
     settings = get_settings()
     prompt = "New query"
     context = [{"role": "user", "content": "New query"}]
-    
+
     # Record only 2 interactions (below min_samples=3)
     for i in range(2):
         cache.record_interaction(
@@ -170,7 +176,7 @@ def test_cache_no_recommendation_insufficient_samples(cache):
             cost=0.001,
             total_tokens=10,
         )
-    
+
     # Should not be confident yet
     confident, confidence = cache.has_confident_history(prompt, context)
     assert confident is False, "Should not be confident with only 2 samples (min is 3)"
@@ -181,7 +187,7 @@ def test_cache_stats_tracking(cache):
     settings = get_settings()
     prompt = "Test query"
     context = [{"role": "user", "content": "Test query"}]
-    
+
     # Record 3 weak, 1 strong
     for i in range(3):
         cache.record_interaction(
@@ -197,7 +203,7 @@ def test_cache_stats_tracking(cache):
             cost=0.001,
             total_tokens=10,
         )
-    
+
     cache.record_interaction(
         prompt=prompt,
         context=context,
@@ -211,7 +217,7 @@ def test_cache_stats_tracking(cache):
         cost=0.05,
         total_tokens=1000,
     )
-    
+
     # Get stats
     stats = cache.get_stats_for_prompt(prompt, context)
     assert stats is not None
@@ -219,7 +225,7 @@ def test_cache_stats_tracking(cache):
     assert stats.weak_calls == 3
     assert stats.strong_calls == 1
     assert stats.judge_invocations == 4
-    
+
     # Confidence should be 3/4 = 0.75 (dominant is weak with 3 calls)
     confidence = cache.confidence_for_hash(stats.semantic_hash)
     assert confidence == 0.75, f"Expected confidence 0.75, got {confidence}"

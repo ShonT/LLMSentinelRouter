@@ -55,7 +55,7 @@ class TestAggregateMetricsByMinute:
         result = aggregate_metrics_by_minute([metric])
         assert result == {}
 
-    @patch('time.time')
+    @patch("time.time")
     def test_metric_on_window_boundary(self, mock_time):
         """Test metric exactly at window edge (240 minutes)."""
         current_time = 1600000000.0
@@ -75,9 +75,21 @@ class TestAggregateMetricsByMinute:
         """Test averaging of multiple metrics in the same minute."""
         current_time = time.time()
         metrics = [
-            {"timestamp": current_time - 45, "type": "judge_latency", "latency_ms": 100},
-            {"timestamp": current_time - 50, "type": "judge_latency", "latency_ms": 200},
-            {"timestamp": current_time - 55, "type": "judge_latency", "latency_ms": 300},
+            {
+                "timestamp": current_time - 45,
+                "type": "judge_latency",
+                "latency_ms": 100,
+            },
+            {
+                "timestamp": current_time - 50,
+                "type": "judge_latency",
+                "latency_ms": 200,
+            },
+            {
+                "timestamp": current_time - 55,
+                "type": "judge_latency",
+                "latency_ms": 300,
+            },
         ]
         result = aggregate_metrics_by_minute(metrics)
         assert len(result) == 1
@@ -88,10 +100,26 @@ class TestAggregateMetricsByMinute:
         """Test different metric types aggregated separately."""
         current_time = time.time()
         metrics = [
-            {"timestamp": current_time - 30, "type": "judge_latency", "latency_ms": 100},
-            {"timestamp": current_time - 30, "type": "weak_model_latency", "latency_ms": 250},
-            {"timestamp": current_time - 30, "type": "strong_model_latency", "latency_ms": 500},
-            {"timestamp": current_time - 30, "type": "overall_request_latency", "latency_ms": 350},
+            {
+                "timestamp": current_time - 30,
+                "type": "judge_latency",
+                "latency_ms": 100,
+            },
+            {
+                "timestamp": current_time - 30,
+                "type": "weak_model_latency",
+                "latency_ms": 250,
+            },
+            {
+                "timestamp": current_time - 30,
+                "type": "strong_model_latency",
+                "latency_ms": 500,
+            },
+            {
+                "timestamp": current_time - 30,
+                "type": "overall_request_latency",
+                "latency_ms": 350,
+            },
         ]
         result = aggregate_metrics_by_minute(metrics)
         assert len(result) == 1
@@ -106,11 +134,23 @@ class TestAggregateMetricsByMinute:
         current_time = time.time()
         metrics = [
             # offset 0 (0-59 seconds ago)
-            {"timestamp": current_time - 10, "type": "judge_latency", "latency_ms": 100},
+            {
+                "timestamp": current_time - 10,
+                "type": "judge_latency",
+                "latency_ms": 100,
+            },
             # offset 1 (60-119 seconds ago)
-            {"timestamp": current_time - 90, "type": "judge_latency", "latency_ms": 200},
+            {
+                "timestamp": current_time - 90,
+                "type": "judge_latency",
+                "latency_ms": 200,
+            },
             # offset 2 (120-179 seconds ago)
-            {"timestamp": current_time - 150, "type": "judge_latency", "latency_ms": 300},
+            {
+                "timestamp": current_time - 150,
+                "type": "judge_latency",
+                "latency_ms": 300,
+            },
         ]
         result = aggregate_metrics_by_minute(metrics)
         assert len(result) == 3
@@ -133,7 +173,8 @@ class TestAggregateMetricsByMinute:
         """Test aggregation with custom window size."""
         current_time = time.time()
         metric = {
-            "timestamp": current_time - 90,  # 1.5 minutes ago → offset 1 in 3‑minute window
+            "timestamp": current_time
+            - 90,  # 1.5 minutes ago → offset 1 in 3‑minute window
             "type": "judge_latency",
             "latency_ms": 123.0,
         }
@@ -240,7 +281,10 @@ class TestPrepareLineChartData:
         assert result["weak_model_latency"][3] == 456.0
         # other entries None
         assert result["judge_latency"][:4] == [None] * 4
-        assert result["weak_model_latency"][:3] + result["weak_model_latency"][4:] == [None] * 4
+        assert (
+            result["weak_model_latency"][:3] + result["weak_model_latency"][4:]
+            == [None] * 4
+        )
 
     def test_out_of_range_offset_ignored(self):
         """Test that offsets outside window are ignored."""
@@ -257,17 +301,35 @@ class TestPrepareLineChartData:
         """Integration test: chain aggregate and prepare functions."""
         current_time = time.time()
         metrics = [
-            {"timestamp": current_time - 30, "type": "judge_latency", "latency_ms": 100},
-            {"timestamp": current_time - 30, "type": "weak_model_latency", "latency_ms": 200},
-            {"timestamp": current_time - 90, "type": "judge_latency", "latency_ms": 150},
-            {"timestamp": current_time - 150, "type": "strong_model_latency", "latency_ms": 500},
+            {
+                "timestamp": current_time - 30,
+                "type": "judge_latency",
+                "latency_ms": 100,
+            },
+            {
+                "timestamp": current_time - 30,
+                "type": "weak_model_latency",
+                "latency_ms": 200,
+            },
+            {
+                "timestamp": current_time - 90,
+                "type": "judge_latency",
+                "latency_ms": 150,
+            },
+            {
+                "timestamp": current_time - 150,
+                "type": "strong_model_latency",
+                "latency_ms": 500,
+            },
         ]
         aggregated = aggregate_metrics_by_minute(metrics)
         chart_data = prepare_line_chart_data(aggregated)
         # Verify we have three minutes with data
         assert len([x for x in chart_data["judge_latency"] if x is not None]) == 2
         assert len([x for x in chart_data["weak_model_latency"] if x is not None]) == 1
-        assert len([x for x in chart_data["strong_model_latency"] if x is not None]) == 1
+        assert (
+            len([x for x in chart_data["strong_model_latency"] if x is not None]) == 1
+        )
         # Check ordering: offset 0 (most recent) -> label "0", offset 1 -> label "1", offset 2 -> label "2"
         # We'll just ensure the data arrays have the correct length.
         assert len(chart_data["judge_latency"]) == 240

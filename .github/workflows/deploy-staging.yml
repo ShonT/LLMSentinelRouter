@@ -1,0 +1,45 @@
+name: Deploy Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy (defaults to commit SHA)'
+        required: false
+        default: ''
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate staging secrets
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+        run: |
+          : "${STAGING_HOST:?Missing STAGING_HOST secret}"
+          : "${STAGING_USER:?Missing STAGING_USER secret}"
+          : "${STAGING_SSH_PRIVATE_KEY:?Missing STAGING_SSH_PRIVATE_KEY secret}"
+
+      - name: Build Docker image
+        run: |
+          IMAGE_TAG="${{ github.sha }}"
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            IMAGE_TAG="${{ inputs.image_tag }}"
+          fi
+          docker build -t sentinelrouter:${IMAGE_TAG} .
+
+      - name: Deploy to staging (placeholder)
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+          STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+        run: |
+          echo "Staging deployment is a manual placeholder."
+          echo "Configure your deployment steps or script (e.g., scripts/deploy_staging.sh)."

@@ -25,14 +25,18 @@ def test_health_endpoint(client):
     assert data["service"] == "sentinelrouter"
 
 
-@pytest.mark.skip(reason="Integration test - move to tests/integration/ (not a unit test)")
+@pytest.mark.skip(
+    reason="Integration test - move to tests/integration/ (not a unit test)"
+)
 def test_metrics_endpoint(client):
     """Test the metrics endpoint - TODO: Move to integration tests."""
     # This tests the full server->database stack, not unit testable
     pass
 
 
-@pytest.mark.skip(reason="Integration test - move to tests/integration/ (not a unit test)")
+@pytest.mark.skip(
+    reason="Integration test - move to tests/integration/ (not a unit test)"
+)
 def test_audit_endpoint(client):
     """Test the audit endpoint - TODO: Move to integration tests."""
     # This tests the full server->database stack, not unit testable
@@ -74,7 +78,9 @@ def test_chat_completions_success(mock_route, client):
     assert response.headers["X-Sentinel-Complexity-Score"] == "0.3"
 
 
-@pytest.mark.skip(reason="Mock assertion issue - budget enforcement tested in unit tests")
+@pytest.mark.skip(
+    reason="Mock assertion issue - budget enforcement tested in unit tests"
+)
 @patch("sentinelrouter.sentinelrouter.server.route_request")
 def test_chat_completions_budget_exceeded(mock_route, client):
     """Test that budget exceeded returns 429."""

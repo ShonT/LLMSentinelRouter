@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # Provider API keys (required)
     deepseek_api_key: str = Field(..., env="DEEPSEEK_API_KEY")
     anthropic_api_key: str = Field(..., env="ANTHROPIC_API_KEY")
-    
+
     # Gemini API keys (backup models) - defaults removed for security
     gemini_backup1_api_key: str = Field("", env="GEMINI_BACKUP1_API_KEY")
     gemini_backup2_api_key: str = Field("", env="GEMINI_BACKUP2_API_KEY")
@@ -55,12 +55,18 @@ class Settings(BaseSettings):
 
     # Cycle detection
     cycle_detection_window_size: int = Field(100, env="CYCLE_DETECTION_WINDOW_SIZE")
-    cycle_detection_simhash_threshold: int = Field(3, env="CYCLE_DETECTION_SIMHASH_THRESHOLD")
+    cycle_detection_simhash_threshold: int = Field(
+        3, env="CYCLE_DETECTION_SIMHASH_THRESHOLD"
+    )
 
     # Semantic cache
     semantic_cache_min_samples: int = Field(3, env="SEMANTIC_CACHE_MIN_SAMPLES")
-    semantic_cache_confidence_threshold: float = Field(0.75, env="SEMANTIC_CACHE_CONFIDENCE_THRESHOLD")
-    semantic_cache_ttl_seconds: int = Field(7 * 24 * 3600, env="SEMANTIC_CACHE_TTL_SECONDS")
+    semantic_cache_confidence_threshold: float = Field(
+        0.75, env="SEMANTIC_CACHE_CONFIDENCE_THRESHOLD"
+    )
+    semantic_cache_ttl_seconds: int = Field(
+        7 * 24 * 3600, env="SEMANTIC_CACHE_TTL_SECONDS"
+    )
     semantic_cache_max_entries: int = Field(10000, env="SEMANTIC_CACHE_MAX_ENTRIES")
 
     # Database
@@ -72,12 +78,16 @@ class Settings(BaseSettings):
     port: int = Field(8000, env="PORT")
     log_level: str = Field("INFO", env="LOG_LEVEL")
     log_file: str = Field("./logs/sentinelrouter.log", env="LOG_FILE")
-    cors_origins: str = Field("*", env="CORS_ORIGINS")  # Comma-separated list, or "*" for all
+    cors_origins: str = Field(
+        "*", env="CORS_ORIGINS"
+    )  # Comma-separated list, or "*" for all
 
     # Logging & Audit
     log_dir: str = Field("logs", env="LOG_DIR")
     enable_file_logging: bool = Field(True, env="ENABLE_FILE_LOGGING")
-    log_rotation_max_bytes: int = Field(10 * 1024 * 1024, env="LOG_ROTATION_MAX_BYTES")  # 10 MB
+    log_rotation_max_bytes: int = Field(
+        10 * 1024 * 1024, env="LOG_ROTATION_MAX_BYTES"
+    )  # 10 MB
     log_rotation_backup_count: int = Field(5, env="LOG_ROTATION_BACKUP_COUNT")
     log_retention_days: int = Field(30, env="LOG_RETENTION_DAYS")
 
@@ -85,26 +95,54 @@ class Settings(BaseSettings):
     enable_budget_killswitch: bool = Field(True, env="ENABLE_BUDGET_KILLSWITCH")
     enable_cycle_detection: bool = Field(True, env="ENABLE_CYCLE_DETECTION")
     enable_dynamic_threshold: bool = Field(True, env="ENABLE_DYNAMIC_THRESHOLD")
-    
+
     # Redaction settings
-    redaction_mode: str = Field("logs", env="REDACTION_MODE")  # "none", "logs", or "strict"
-    redaction_strategy: str = Field("simple", env="REDACTION_STRATEGY")  # "simple" or "hmac"
-    redaction_salt: str = Field("change-me-in-production", env="REDACTION_SALT")  # For HMAC strategy
-    redaction_enabled_categories: str = Field("", env="REDACTION_CATEGORIES")  # Comma-separated, empty = all
+    redaction_mode: str = Field(
+        "logs", env="REDACTION_MODE"
+    )  # "none", "logs", or "strict"
+    redaction_strategy: str = Field(
+        "simple", env="REDACTION_STRATEGY"
+    )  # "simple" or "hmac"
+    redaction_salt: str = Field(
+        "change-me-in-production", env="REDACTION_SALT"
+    )  # For HMAC strategy
+    redaction_enabled_categories: str = Field(
+        "", env="REDACTION_CATEGORIES"
+    )  # Comma-separated, empty = all
 
     # Semantic similarity strategy (for cycle detection and caching)
-    semantic_strategy: str = Field("VECTORDB_LOCAL", env="SEMANTIC_STRATEGY")  # "SIMHASH", "VECTORDB_LOCAL", or "VECTORDB_API"
-    semantic_similarity_threshold: float = Field(0.85, env="SEMANTIC_SIMILARITY_THRESHOLD")  # 0.0 to 1.0
-    semantic_hash_bits: int = Field(64, env="SEMANTIC_HASH_BITS")  # For SIMHASH strategy
-    semantic_model_path: str = Field("", env="SEMANTIC_MODEL_PATH")  # Custom ONNX model path for VECTORDB_LOCAL
-    semantic_api_key: str = Field("", env="SEMANTIC_API_KEY")  # API key for VECTORDB_API (or uses openai_api_key)
-    semantic_api_provider: str = Field("openai", env="SEMANTIC_API_PROVIDER")  # "openai" or "voyage"
-    semantic_api_model: str = Field("text-embedding-3-small", env="SEMANTIC_API_MODEL")  # Model name for API
-    openai_api_key: str = Field("", env="OPENAI_API_KEY")  # OpenAI API key (for VECTORDB_API fallback)
+    semantic_strategy: str = Field(
+        "VECTORDB_LOCAL", env="SEMANTIC_STRATEGY"
+    )  # "SIMHASH", "VECTORDB_LOCAL", or "VECTORDB_API"
+    semantic_similarity_threshold: float = Field(
+        0.85, env="SEMANTIC_SIMILARITY_THRESHOLD"
+    )  # 0.0 to 1.0
+    semantic_hash_bits: int = Field(
+        64, env="SEMANTIC_HASH_BITS"
+    )  # For SIMHASH strategy
+    semantic_model_path: str = Field(
+        "", env="SEMANTIC_MODEL_PATH"
+    )  # Custom ONNX model path for VECTORDB_LOCAL
+    semantic_api_key: str = Field(
+        "", env="SEMANTIC_API_KEY"
+    )  # API key for VECTORDB_API (or uses openai_api_key)
+    semantic_api_provider: str = Field(
+        "openai", env="SEMANTIC_API_PROVIDER"
+    )  # "openai" or "voyage"
+    semantic_api_model: str = Field(
+        "text-embedding-3-small", env="SEMANTIC_API_MODEL"
+    )  # Model name for API
+    openai_api_key: str = Field(
+        "", env="OPENAI_API_KEY"
+    )  # OpenAI API key (for VECTORDB_API fallback)
 
     # Unified configuration file path
-    models_config_path: str = Field("config/models_config.json", env="MODELS_CONFIG_PATH")
-    sentinel_config_path: str = Field("config/sentinel_config.json", env="SENTINEL_CONFIG_PATH")
+    models_config_path: str = Field(
+        "config/models_config.json", env="MODELS_CONFIG_PATH"
+    )
+    sentinel_config_path: str = Field(
+        "config/sentinel_config.json", env="SENTINEL_CONFIG_PATH"
+    )
 
     # Hardcoded prices (per million tokens) - not configurable, defined in clients.py
     # DeepSeek: $0.27 per million tokens
@@ -122,6 +160,7 @@ def get_settings() -> Settings:
     if _settings_instance is None:
         _settings_instance = Settings()
     return _settings_instance
+
 
 _settings_instance = None
 
@@ -279,7 +318,9 @@ def _build_sentinel_config_from_legacy(config: UnifiedConfig) -> SentinelConfig:
         weak_models = [item[1] for item in sorted(weak_models, key=lambda x: x[0])]
         strong_models = [item[1] for item in sorted(strong_models, key=lambda x: x[0])]
 
-    judge_enabled = bool(config.judge_config.model_order) or config.judge_config.is_judge_required
+    judge_enabled = (
+        bool(config.judge_config.model_order) or config.judge_config.is_judge_required
+    )
     sentinel_dict = {
         "keys": keys,
         "key_instances": key_instances,

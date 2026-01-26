@@ -1320,6 +1320,7 @@ async def dashboard_home():
 
 # API endpoints for the enhanced dashboard
 
+
 @dashboard_app.get("/api/dashboard/live")
 async def get_live_data():
     """Get live model state and configuration for Tab 1."""
@@ -1331,13 +1332,9 @@ async def get_live_data():
     for model_id, model_config in all_models.items():
         model_state = await state_manager.get_model_state(model_id)
         # Convert to dict with proper datetime serialization
-        config_dict = model_config.model_dump(mode='json')
-        state_dict = model_state.model_dump(mode='json') if model_state else None
-        models.append({
-            "id": model_id,
-            "config": config_dict,
-            "state": state_dict
-        })
+        config_dict = model_config.model_dump(mode="json")
+        state_dict = model_state.model_dump(mode="json") if model_state else None
+        models.append({"id": model_id, "config": config_dict, "state": state_dict})
     return JSONResponse({"models": models})
 
 
@@ -1346,9 +1343,7 @@ async def reset_model_cost(model_id: str):
     """Reset session cost for a specific model."""
     state_manager = await get_state_manager()
     await state_manager.update_model_state(
-        model_id,
-        total_cost_session=0.0,
-        last_updated_ts=datetime.utcnow()
+        model_id, total_cost_session=0.0, last_updated_ts=datetime.utcnow()
     )
     return JSONResponse({"status": "success", "message": f"Cost reset for {model_id}"})
 
@@ -1361,7 +1356,9 @@ async def update_model_status(model_id: str, request: dict):
         raise HTTPException(status_code=400, detail="Invalid status")
     # In a real implementation, we would update the config and persist it.
     # For now, we just return success.
-    return JSONResponse({"status": "success", "message": f"Model {model_id} status set to {new_status}"})
+    return JSONResponse(
+        {"status": "success", "message": f"Model {model_id} status set to {new_status}"}
+    )
 
 
 @dashboard_app.post("/api/dashboard/reset-all-costs")
@@ -1371,9 +1368,7 @@ async def reset_all_costs():
     config = get_unified_config()
     for model_id in config.models.keys():
         await state_manager.update_model_state(
-            model_id,
-            total_cost_session=0.0,
-            last_updated_ts=datetime.utcnow()
+            model_id, total_cost_session=0.0, last_updated_ts=datetime.utcnow()
         )
     return JSONResponse({"status": "success", "message": "All costs reset"})
 
@@ -1395,103 +1390,124 @@ async def stop_all_models():
 async def get_dashboard_metrics(db: Session = Depends(get_dbsession)):
     """Get metrics for charts and counters."""
     from .metrics import get_metrics_collector
-    
+
     # Get metrics from collector
     collector = get_metrics_collector()
     stats = collector.get_aggregated_stats()
-    
+
     # Get all metrics (not just 50) to cover the 4-hour window
     # Use a large limit to ensure we capture enough metrics for 4 hours
     # In practice, we need metrics from the last 240 minutes (4 hours)
     # Assuming average request rate, we'll get up to 10,000 metrics
     all_metrics = collector.get_recent_metrics(limit=10000)
-    
+
     # Filter for successful latency events only (status != 'error')
     # and only include the four latency metric types
     latency_metrics = []
     for metric in all_metrics:
-        metric_type = metric.get('type', '')
+        metric_type = metric.get("type", "")
         # Check if it's one of the four latency types
-        if metric_type in ('judge_latency', 'weak_model_latency',
-                          'strong_model_latency', 'overall_request_latency'):
+        if metric_type in (
+            "judge_latency",
+            "weak_model_latency",
+            "strong_model_latency",
+            "overall_request_latency",
+        ):
             # Filter for successful events
-            if metric.get('status') != 'error':
+            if metric.get("status") != "error":
                 latency_metrics.append(metric)
-    
+
     # Aggregate metrics by minute using the utility function
     aggregated = aggregate_metrics_by_minute(latency_metrics, window_minutes=240)
-    
+
     # Prepare line chart data for frontend
     chart_data = prepare_line_chart_data(aggregated, window_minutes=240)
-    
+
     # Build latency series structure for frontend
     latency_series = {
         "labels": chart_data["labels"],
         "judge_latency": chart_data["judge_latency"],
         "weak_model_latency": chart_data["weak_model_latency"],
         "strong_model_latency": chart_data["strong_model_latency"],
-        "overall_request_latency": chart_data["overall_request_latency"]
+        "overall_request_latency": chart_data["overall_request_latency"],
     }
-    
+
     # Count fallbacks - sum all fallback types
-    fallback_counts = stats.get('fallback_counts', {})
+    fallback_counts = stats.get("fallback_counts", {})
     total_fallbacks = sum(fallback_counts.values())
-    
+
     # Calculate judge success rate (using all judge latency metrics, not just successful ones)
     # We need judge calls from all metrics, not just filtered
-    judge_calls = [m for m in all_metrics if m.get('type') == 'judge_latency']
-    judge_success = [m for m in judge_calls if m.get('status') == 'success']
-    judge_success_rate = (len(judge_success) / len(judge_calls) * 100) if judge_calls else 0
+    judge_calls = [m for m in all_metrics if m.get("type") == "judge_latency"]
+    judge_success = [m for m in judge_calls if m.get("status") == "success"]
+    judge_success_rate = (
+        (len(judge_success) / len(judge_calls) * 100) if judge_calls else 0
+    )
     judge_call_count = len(judge_calls)
-    
+
     # Calculate judge skip rate
-    judge_skips = [m for m in all_metrics if m.get('type') == 'judge_skip']
+    judge_skips = [m for m in all_metrics if m.get("type") == "judge_skip"]
     total_judge_opportunities = len(judge_calls) + len(judge_skips)
-    judge_skip_rate = (len(judge_skips) / total_judge_opportunities * 100) if total_judge_opportunities else 0
-    
+    judge_skip_rate = (
+        (len(judge_skips) / total_judge_opportunities * 100)
+        if total_judge_opportunities
+        else 0
+    )
+
     # Build per-judge breakdown
     judge_breakdown = {}
     for m in judge_calls:
-        judge_id = m.get('judge_id', 'unknown')
+        judge_id = m.get("judge_id", "unknown")
         if judge_id not in judge_breakdown:
-            judge_breakdown[judge_id] = {'calls': 0, 'success': 0, 'failures': 0, 'latencies': []}
-        judge_breakdown[judge_id]['calls'] += 1
-        if m.get('status') == 'success':
-            judge_breakdown[judge_id]['success'] += 1
-            judge_breakdown[judge_id]['latencies'].append(m.get('latency_ms', 0))
+            judge_breakdown[judge_id] = {
+                "calls": 0,
+                "success": 0,
+                "failures": 0,
+                "latencies": [],
+            }
+        judge_breakdown[judge_id]["calls"] += 1
+        if m.get("status") == "success":
+            judge_breakdown[judge_id]["success"] += 1
+            judge_breakdown[judge_id]["latencies"].append(m.get("latency_ms", 0))
         else:
-            judge_breakdown[judge_id]['failures'] += 1
-    
+            judge_breakdown[judge_id]["failures"] += 1
+
     # Calculate avg latency per judge
     for judge_id in judge_breakdown:
-        latencies = judge_breakdown[judge_id]['latencies']
-        judge_breakdown[judge_id]['avg_latency'] = round(sum(latencies) / len(latencies), 2) if latencies else 0
-        del judge_breakdown[judge_id]['latencies']  # Remove temp array
-    
+        latencies = judge_breakdown[judge_id]["latencies"]
+        judge_breakdown[judge_id]["avg_latency"] = (
+            round(sum(latencies) / len(latencies), 2) if latencies else 0
+        )
+        del judge_breakdown[judge_id]["latencies"]  # Remove temp array
+
     # Get last 20 fallback events
-    judge_fallbacks = [m for m in all_metrics if m.get('type') == 'judge_fallback']
+    judge_fallbacks = [m for m in all_metrics if m.get("type") == "judge_fallback"]
     fallback_chain = []
     for fb in judge_fallbacks[-20:]:
-        fallback_chain.append({
-            'timestamp': fb.get('timestamp', ''),
-            'primary_id': fb.get('primary_id', 'unknown'),
-            'backup_id': fb.get('backup_id', 'unknown')
-        })
+        fallback_chain.append(
+            {
+                "timestamp": fb.get("timestamp", ""),
+                "primary_id": fb.get("primary_id", "unknown"),
+                "backup_id": fb.get("backup_id", "unknown"),
+            }
+        )
     judge_fallback_count = len(judge_fallbacks)
-    
-    return JSONResponse({
-        "total_fallbacks": total_fallbacks,
-        "judge_latency": stats.get('judge_latency', {}),
-        "weak_model_latency": stats.get('weak_model_latency', {}),
-        "strong_model_latency": stats.get('strong_model_latency', {}),
-        "latency_series": latency_series,
-        "judge_success_rate": round(judge_success_rate, 1),
-        "judge_skip_rate": round(judge_skip_rate, 1),
-        "judge_call_count": judge_call_count,
-        "judge_fallback_count": judge_fallback_count,
-        "judge_breakdown": judge_breakdown,
-        "fallback_chain": fallback_chain
-    })
+
+    return JSONResponse(
+        {
+            "total_fallbacks": total_fallbacks,
+            "judge_latency": stats.get("judge_latency", {}),
+            "weak_model_latency": stats.get("weak_model_latency", {}),
+            "strong_model_latency": stats.get("strong_model_latency", {}),
+            "latency_series": latency_series,
+            "judge_success_rate": round(judge_success_rate, 1),
+            "judge_skip_rate": round(judge_skip_rate, 1),
+            "judge_call_count": judge_call_count,
+            "judge_fallback_count": judge_fallback_count,
+            "judge_breakdown": judge_breakdown,
+            "fallback_chain": fallback_chain,
+        }
+    )
 
 
 @dashboard_app.get("/api/dashboard/configuration")
@@ -1508,31 +1524,31 @@ async def get_configuration():
     }
     models = []
     for model_id, model_config in config.models.items():
-        models.append({
-            "id": model_id,
-            "config": model_config.model_dump(mode='json')
-        })
-    return JSONResponse({
-        "api_keys": api_keys,
-        "models": models,
-        "system_settings": config.system_settings.model_dump(mode='json')
-    })
+        models.append({"id": model_id, "config": model_config.model_dump(mode="json")})
+    return JSONResponse(
+        {
+            "api_keys": api_keys,
+            "models": models,
+            "system_settings": config.system_settings.model_dump(mode="json"),
+        }
+    )
 
 
 @dashboard_app.get("/api/dashboard/logs")
 async def get_routing_logs(
-    db: Session = Depends(get_dbsession), 
-    limit: int = 50,
-    include_preview: bool = False
+    db: Session = Depends(get_dbsession), limit: int = 50, include_preview: bool = False
 ):
     """Get recent routing decision logs for Tab 3."""
     from .logging_audit import LoggingAudit
-    
-    logs = db.query(RoutingDecision)\
-             .order_by(RoutingDecision.timestamp.desc())\
-             .limit(limit).all()
+
+    logs = (
+        db.query(RoutingDecision)
+        .order_by(RoutingDecision.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
     result = []
-    
+
     # Load request logs if preview is requested
     request_logs = {}
     if include_preview:
@@ -1540,7 +1556,7 @@ async def get_routing_logs(
         # Currently LoggingAudit only writes logs, doesn't have a read method
         # Skipping preview feature until read functionality is implemented
         pass
-    
+
     for log in logs:
         log_entry = {
             "session_id": log.session_id,
@@ -1548,15 +1564,15 @@ async def get_routing_logs(
             "model_used": log.model_used,
             "complexity_score": log.complexity_score or 0.0,
             "cost_incurred": log.cost_incurred or 0.0,
-            "cost_source": getattr(log, 'cost_source', 'unknown'),
-            "computed_cost": getattr(log, 'computed_cost', None),
+            "cost_source": getattr(log, "cost_source", "unknown"),
+            "computed_cost": getattr(log, "computed_cost", None),
             "impact_scope": log.impact_scope or "unknown",
             "reason": log.reason or "",
             "timestamp": log.timestamp.timestamp() if log.timestamp else 0,
             "decision_reason": log.reason or "No reason provided",
-            "cycle_detected": "cycle" in (log.reason or "").lower()
+            "cycle_detected": "cycle" in (log.reason or "").lower(),
         }
-        
+
         # Add request/response preview if available
         if include_preview and log.request_id in request_logs:
             req_log = request_logs[log.request_id]
@@ -1566,17 +1582,19 @@ async def get_routing_logs(
                 if messages:
                     first_msg = messages[-1] if isinstance(messages, list) else messages
                     log_entry["request_preview"] = first_msg.get("content", "")[:500]
-            
+
             # Extract response preview
             if "response" in req_log and "choices" in req_log["response"]:
                 choices = req_log["response"]["choices"]
                 if choices:
                     first_choice = choices[0] if isinstance(choices, list) else choices
                     if "message" in first_choice:
-                        log_entry["response_preview"] = first_choice["message"].get("content", "")[:500]
-        
+                        log_entry["response_preview"] = first_choice["message"].get(
+                            "content", ""
+                        )[:500]
+
         result.append(log_entry)
-    
+
     return JSONResponse({"logs": result})
 
 
@@ -1590,99 +1608,103 @@ async def clear_routing_logs(db: Session = Depends(get_dbsession)):
 
 # ==================== Model Configuration CRUD Endpoints ====================
 
+
 @dashboard_app.post("/api/dashboard/models")
 async def create_model(request: dict):
     """Create a new model configuration."""
     from ..schemas.config_models import ModelConfig
+
     state_manager = await get_state_manager()
-    
+
     model_id = request.get("model_id")
     if not model_id:
         raise HTTPException(status_code=400, detail="model_id is required")
-    
+
     # Validate model config
     try:
         model_config = ModelConfig(**request.get("config", {}))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid model config: {e}")
-    
+
     success = await state_manager.add_model(model_id, model_config)
     if not success:
         raise HTTPException(status_code=409, detail=f"Model {model_id} already exists")
-    
-    return JSONResponse({
-        "status": "success",
-        "message": f"Model {model_id} created",
-        "model_id": model_id
-    })
+
+    return JSONResponse(
+        {
+            "status": "success",
+            "message": f"Model {model_id} created",
+            "model_id": model_id,
+        }
+    )
 
 
 @dashboard_app.put("/api/dashboard/models/{model_id}")
 async def update_model(model_id: str, request: dict):
     """Update an existing model configuration."""
     state_manager = await get_state_manager()
-    
+
     # Check if model exists
     existing = await state_manager.get_model_config(model_id)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
-    
+
     # Update with provided fields
     success = await state_manager.update_model_config(model_id, **request)
     if not success:
         raise HTTPException(status_code=400, detail="Update failed")
-    
-    return JSONResponse({
-        "status": "success",
-        "message": f"Model {model_id} updated"
-    })
+
+    return JSONResponse({"status": "success", "message": f"Model {model_id} updated"})
 
 
 @dashboard_app.delete("/api/dashboard/models/{model_id}")
 async def delete_model(model_id: str):
     """Delete a model configuration."""
     state_manager = await get_state_manager()
-    
+
     success = await state_manager.delete_model(model_id)
     if not success:
         raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
-    
-    return JSONResponse({
-        "status": "success",
-        "message": f"Model {model_id} deleted"
-    })
+
+    return JSONResponse({"status": "success", "message": f"Model {model_id} deleted"})
 
 
 @dashboard_app.put("/api/dashboard/judge-config")
 async def update_judge_config(request: dict):
     """Update judge configuration."""
     state_manager = await get_state_manager()
-    
+
     success = await state_manager.update_judge_config(**request)
     if not success:
         raise HTTPException(status_code=400, detail="Failed to update judge config")
-    
-    return JSONResponse({
-        "status": "success",
-        "message": "Judge config updated",
-        "config": (await state_manager.get_judge_config()).model_dump()
-    })
+
+    return JSONResponse(
+        {
+            "status": "success",
+            "message": "Judge config updated",
+            "config": (await state_manager.get_judge_config()).model_dump(),
+        }
+    )
 
 
 @dashboard_app.put("/api/dashboard/routing-order")
 async def update_routing_order(request: dict):
     """Update routing order configuration (strong/weak models)."""
     state_manager = await get_state_manager()
-    
+
     success = await state_manager.update_routing_order_config(**request)
     if not success:
-        raise HTTPException(status_code=400, detail="Failed to update routing order config")
-    
-    return JSONResponse({
-        "status": "success",
-        "message": "Routing order config updated",
-        "config": (await state_manager.get_routing_order_config()).model_dump()
-    })
+        raise HTTPException(
+            status_code=400, detail="Failed to update routing order config"
+        )
+
+    return JSONResponse(
+        {
+            "status": "success",
+            "message": "Routing order config updated",
+            "config": (await state_manager.get_routing_order_config()).model_dump(),
+        }
+    )
 
 
 @dashboard_app.get("/api/dashboard/full-config")
@@ -1690,40 +1712,42 @@ async def get_full_configuration():
     """Get complete configuration including judge and routing order."""
     config = get_unified_config()
     state_manager = await get_state_manager()
-    
+
     judge_config = await state_manager.get_judge_config()
     routing_order_config = await state_manager.get_routing_order_config()
-    
-    return JSONResponse({
-        "system_settings": config.system_settings.model_dump(),
-        "models": {k: v.model_dump() for k, v in config.models.items()},
-        "judge_config": judge_config.model_dump(),
-        "routing_order_config": routing_order_config.model_dump()
-    })
+
+    return JSONResponse(
+        {
+            "system_settings": config.system_settings.model_dump(),
+            "models": {k: v.model_dump() for k, v in config.models.items()},
+            "judge_config": judge_config.model_dump(),
+            "routing_order_config": routing_order_config.model_dump(),
+        }
+    )
 
 
 def aggregate_metrics_by_minute(
-    metrics: List[Dict[str, Any]],
-    window_minutes: int = 240
+    metrics: List[Dict[str, Any]], window_minutes: int = 240
 ) -> Dict[int, Dict[str, float]]:
     """
     Aggregate latency metrics by minute offset within a sliding window.
-    
+
     Groups metrics into minute buckets (0-239) and computes average latency
     for four metric types: judge_latency, weak_model_latency,
     strong_model_latency, and overall_request_latency.
-    
+
     Args:
         metrics: List of metric dicts with 'timestamp', 'type', and 'latency_ms'
         window_minutes: Size of sliding window in minutes (default 240 for 4 hours)
-    
+
     Returns:
         Dict mapping minute offset (0-239) to dict of metric type -> average latency.
         Only includes offsets that have data; missing minutes are omitted.
     """
     import time
+
     current_time = time.time()
-    
+
     # Initialize aggregation structure: offset -> metric_type -> (sum, count)
     aggregation = {
         offset: {
@@ -1734,44 +1758,44 @@ def aggregate_metrics_by_minute(
         }
         for offset in range(window_minutes)
     }
-    
+
     # Filter to only latency metrics within the window
     latency_types = {
         "judge_latency",
         "weak_model_latency",
         "strong_model_latency",
-        "overall_request_latency"
+        "overall_request_latency",
     }
-    
+
     for metric in metrics:
         metric_type = metric.get("type")
         if metric_type not in latency_types:
             continue
-        
+
         timestamp = metric.get("timestamp")
         if timestamp is None:
             continue
-        
+
         # Calculate age in seconds
         age_seconds = current_time - timestamp
         if age_seconds < 0 or age_seconds > window_minutes * 60:
             continue  # Outside window
-        
+
         # Convert to minute offset (0 = most recent minute, 239 = 239 minutes ago)
         minute_offset = int(age_seconds / 60)
         if minute_offset >= window_minutes:
             minute_offset = window_minutes - 1
-        
+
         latency = metric.get("latency_ms")
         if latency is None:
             continue
-        
+
         # Accumulate
         bucket = aggregation[minute_offset]
         if metric_type in bucket:
             bucket[metric_type]["sum"] += latency
             bucket[metric_type]["count"] += 1
-    
+
     # Convert to averages, removing empty buckets
     result = {}
     for offset in range(window_minutes):
@@ -1781,27 +1805,26 @@ def aggregate_metrics_by_minute(
             data = bucket[metric_type]
             if data["count"] > 0:
                 minute_averages[metric_type] = data["sum"] / data["count"]
-        
+
         if minute_averages:  # Only include minutes with data
             result[offset] = minute_averages
-    
+
     return result
 
 
 def prepare_line_chart_data(
-    aggregated_data: Dict[int, Dict[str, float]],
-    window_minutes: int = 240
+    aggregated_data: Dict[int, Dict[str, float]], window_minutes: int = 240
 ) -> Dict[str, Any]:
     """
     Convert minute-aggregated data to Chart.js line chart format.
-    
+
     Creates labels from window_minutes to 0 (minutes ago) and four data arrays
     with None values for missing minutes (to create gaps with spanGaps: true).
-    
+
     Args:
         aggregated_data: Output from aggregate_metrics_by_minute
         window_minutes: Size of sliding window in minutes (default 240)
-    
+
     Returns:
         Dict with "labels" (list of strings) and four data arrays:
         - judge_latency
@@ -1814,16 +1837,16 @@ def prepare_line_chart_data(
     weak_data = [None] * window_minutes
     strong_data = [None] * window_minutes
     overall_data = [None] * window_minutes
-    
+
     # Fill in data where available
     for offset, minute_averages in aggregated_data.items():
         if offset < 0 or offset >= window_minutes:
             continue
-        
+
         # Convert offset to chart index (0 = oldest, 239 = most recent)
         # We want labels from window_minutes to 0 (minutes ago)
         chart_index = window_minutes - 1 - offset
-        
+
         if "judge_latency" in minute_averages:
             judge_data[chart_index] = minute_averages["judge_latency"]
         if "weak_model_latency" in minute_averages:
@@ -1832,16 +1855,16 @@ def prepare_line_chart_data(
             strong_data[chart_index] = minute_averages["strong_model_latency"]
         if "overall_request_latency" in minute_averages:
             overall_data[chart_index] = minute_averages["overall_request_latency"]
-    
+
     # Create labels: "240", "239", ..., "1", "0" (minutes ago)
     labels = [str(window_minutes - i - 1) for i in range(window_minutes)]
-    
+
     return {
         "labels": labels,
         "judge_latency": judge_data,
         "weak_model_latency": weak_data,
         "strong_model_latency": strong_data,
-        "overall_request_latency": overall_data
+        "overall_request_latency": overall_data,
     }
 
 

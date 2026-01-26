@@ -13,8 +13,10 @@ import warnings
 # Provider Types
 # ============================================================================
 
+
 class ProviderType(str, Enum):
     """Supported LLM provider types."""
+
     GROQ = "groq"
     OPENROUTER = "openrouter"
     DEEPSEEK = "deepseek"
@@ -26,16 +28,18 @@ class ProviderType(str, Enum):
 # Key Management
 # ============================================================================
 
+
 class Key(BaseModel):
     """
     A credential (API key) for a provider.
     Keys are stored separately and referenced by KeyInstances.
     """
+
     type: ProviderType = Field(
         ...,
         description="Provider type this key authenticates with.",
     )
-    
+
     value: str = Field(
         ...,
         description="The API key value. Should be managed securely (env vars).",
@@ -47,6 +51,7 @@ class KeyInstance(BaseModel):
     A named reference to a key, allowing multiple instances per provider.
     Example: 'groq_primary', 'groq_backup' both reference different keys.
     """
+
     key_ref: str = Field(
         ...,
         description="Reference to a key ID in the keys dictionary.",
@@ -57,12 +62,12 @@ class KeyInstance(BaseModel):
         ge=0,
         description="Priority order for this key instance (lower is higher priority).",
     )
-    
+
     enabled: bool = Field(
         True,
         description="Whether this key instance can be used for routing.",
     )
-    
+
     description: Optional[str] = Field(
         None,
         description="Human-readable description of this key instance.",
@@ -73,17 +78,19 @@ class KeyInstance(BaseModel):
 # Pricing and Limits
 # ============================================================================
 
+
 class Pricing(BaseModel):
     """
     Pricing configuration for a model.
     All costs are per million tokens.
     """
+
     input_cost_per_m: float = Field(
         0.0,
         ge=0.0,
         description="Cost per million input tokens (USD).",
     )
-    
+
     output_cost_per_m: float = Field(
         0.0,
         ge=0.0,
@@ -96,18 +103,19 @@ class Limits(BaseModel):
     Local rate limits enforced by SentinelRouter.
     These protect against hitting provider limits.
     """
+
     requests_per_minute: int = Field(
         ...,
         ge=0,
         description="Maximum requests per minute for this model.",
     )
-    
+
     requests_per_day: int = Field(
         ...,
         ge=0,
         description="Maximum requests per day for this model.",
     )
-    
+
     tokens_per_minute: int = Field(
         ...,
         ge=0,
@@ -119,11 +127,13 @@ class Limits(BaseModel):
 # Model Definition
 # ============================================================================
 
+
 class ModelDefinition(BaseModel):
     """
     A concrete executable model definition.
     A model is uniquely identified by (provider, model_id, key_instance[s]).
     """
+
     enabled: bool = Field(
         True,
         description=(
@@ -150,7 +160,7 @@ class ModelDefinition(BaseModel):
             "Deprecated in favor of key_instances for priority-based failover."
         ),
     )
-    
+
     key_instances: Optional[List[str]] = Field(
         None,
         description=(
@@ -168,7 +178,7 @@ class ModelDefinition(BaseModel):
         ...,
         description="Local rate limits enforced by SentinelRouter. Mandatory.",
     )
-    
+
     display_name: Optional[str] = Field(
         None,
         description="Human-readable display name for dashboard/logs.",
@@ -179,11 +189,13 @@ class ModelDefinition(BaseModel):
 # Routing Configuration
 # ============================================================================
 
+
 class RoutingTier(BaseModel):
     """
     A routing tier defines an ordered list of models to try.
     Models are attempted in order until one succeeds or budget is exceeded.
     """
+
     order: List[str] = Field(
         ...,
         description="Ordered list of model IDs to try in this tier.",
@@ -194,11 +206,12 @@ class RoutingPolicy(BaseModel):
     """
     Defines routing strategy with weak (fast/cheap) and strong (slow/expensive) tiers.
     """
+
     weak_tier: RoutingTier = Field(
         ...,
         description="Fast/cheap models attempted first.",
     )
-    
+
     strong_tier: RoutingTier = Field(
         ...,
         description="Slow/expensive models used when weak tier fails or escalates.",
@@ -209,16 +222,18 @@ class RoutingPolicy(BaseModel):
 # Judge Configuration
 # ============================================================================
 
+
 class JudgeConfig(BaseModel):
     """
     Configuration for the judge system.
     The judge evaluates responses and makes escalation decisions.
     """
+
     enabled: bool = Field(
         False,
         description="Whether the judge system is active.",
     )
-    
+
     model_order: List[str] = Field(
         default_factory=list,
         description=(
@@ -226,7 +241,7 @@ class JudgeConfig(BaseModel):
             "First available model in the list will be used."
         ),
     )
-    
+
     complexity_threshold: float = Field(
         0.5,
         ge=0.0,
@@ -239,29 +254,31 @@ class JudgeConfig(BaseModel):
 # Semantic Cache Configuration
 # ============================================================================
 
+
 class SemanticCacheConfig(BaseModel):
     """
     Configuration for semantic similarity caching.
     Caches routing decisions for similar queries.
     """
+
     enabled: bool = Field(
         False,
         description="Whether semantic caching is active.",
     )
-    
+
     min_samples: int = Field(
         3,
         ge=1,
         description="Minimum samples needed before cache entry is considered reliable.",
     )
-    
+
     confidence_threshold: float = Field(
         0.75,
         ge=0.0,
         le=1.0,
         description="Confidence threshold for using cached routing decision.",
     )
-    
+
     ttl_seconds: int = Field(
         604800,  # 7 days
         ge=0,
@@ -273,38 +290,39 @@ class SemanticCacheConfig(BaseModel):
 # Main Configuration
 # ============================================================================
 
+
 class SentinelConfig(BaseModel):
     """
     Complete SentinelRouter configuration.
     Validated at load time with referential integrity checks.
     """
-    
+
     # Core configuration sections
     keys: Dict[str, Key] = Field(
         ...,
         description="API keys indexed by key ID.",
     )
-    
+
     key_instances: Dict[str, KeyInstance] = Field(
         ...,
         description="Named key instances that reference keys.",
     )
-    
+
     models: Dict[str, ModelDefinition] = Field(
         ...,
         description="Model definitions indexed by model ID.",
     )
-    
+
     routing_policy: RoutingPolicy = Field(
         ...,
         description="Routing configuration with weak and strong tiers.",
     )
-    
+
     judge: JudgeConfig = Field(
         default_factory=JudgeConfig,
         description="Judge system configuration.",
     )
-    
+
     semantic_cache: SemanticCacheConfig = Field(
         default_factory=SemanticCacheConfig,
         description="Semantic cache configuration.",
@@ -364,9 +382,7 @@ class SentinelConfig(BaseModel):
                     )
 
             if model.enabled and enabled_instances == 0:
-                raise ValueError(
-                    f"Model '{model_id}' has no enabled key_instances"
-                )
+                raise ValueError(f"Model '{model_id}' has no enabled key_instances")
 
         # ------------------------------------------------------------------
         # 3. Validate routing tiers are non-empty
@@ -411,9 +427,7 @@ class SentinelConfig(BaseModel):
         # ------------------------------------------------------------------
         if self.judge.enabled:
             if not self.judge.model_order:
-                raise ValueError(
-                    "judge.enabled is True but judge.model_order is empty"
-                )
+                raise ValueError("judge.enabled is True but judge.model_order is empty")
 
             for model_id in self.judge.model_order:
                 if model_id not in self.models:

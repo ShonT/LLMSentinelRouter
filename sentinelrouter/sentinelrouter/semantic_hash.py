@@ -46,7 +46,9 @@ def hamming_distance(a: int, b: int, hash_bits: int = 64) -> int:
     return distance
 
 
-def semantic_hash_for_payload(prompt: str, context: Optional[str] = None, hash_bits: int = 64) -> int:
+def semantic_hash_for_payload(
+    prompt: str, context: Optional[str] = None, hash_bits: int = 64
+) -> int:
     """
     Compute a SimHash for the prompt combined with optional context to ensure
     routing/cache keys incorporate conversation state.
