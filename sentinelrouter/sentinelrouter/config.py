@@ -39,7 +39,9 @@ class Settings(BaseSettings):
 
     # Optional provider API keys
     openrouter_api_key: str = Field("", env="OPENROUTER_API_KEY")
-    openrouter_http_referer: str = Field("http://localhost", env="OPENROUTER_HTTP_REFERER")
+    openrouter_http_referer: str = Field(
+        "http://localhost", env="OPENROUTER_HTTP_REFERER"
+    )
     openrouter_app_title: str = Field("LLMSentinelRouter", env="OPENROUTER_APP_TITLE")
     groq_api_key: str = Field("", env="GROQ_API_KEY")
 
@@ -48,8 +50,8 @@ class Settings(BaseSettings):
     strong_model_id: str = Field("claude-3-opus-20240229", env="STRONG_MODEL_ID")
 
     # Budget & routing
-    max_cost_per_session: float = Field(25.0, env="MAX_COST_PER_SESSION")
-    initial_threshold: float = Field(0.9, env="INITIAL_THRESHOLD")
+    max_cost_per_session: float = Field(10.0, env="MAX_COST_PER_SESSION")
+    initial_threshold: float = Field(0.7, env="INITIAL_THRESHOLD")
     escalation_rate_limit: float = Field(0.05, env="ESCALATION_RATE_LIMIT")
 
     # Complexity threshold (for judge)

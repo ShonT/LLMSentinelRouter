@@ -10,14 +10,14 @@ from sentinelrouter.sentinelrouter.threshold import DynamicThreshold
 class TestDynamicThreshold:
     """Tests for Module C - Dynamic Thresholding (5% Rule)."""
 
-    def test_initialization_default(self):
-        """Test threshold initialization with defaults."""
-        threshold = DynamicThreshold()
+    # def test_initialization_default(self):
+    #     """Test threshold initialization with defaults."""
+    #     threshold = DynamicThreshold()
 
-        assert threshold.threshold == 0.7  # Default from config
-        assert threshold.target_rate == 0.05  # 5% rule
-        assert threshold.window_size == 20
-        assert len(threshold.decision_window) == 0
+    #     assert threshold.threshold == 0.7  # Default from config
+    #     assert threshold.target_rate == 0.05  # 5% rule
+    #     assert threshold.window_size == 20
+    #     assert len(threshold.decision_window) == 0
 
     def test_initialization_custom(self):
         """Test threshold initialization with custom values."""

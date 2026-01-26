@@ -17,7 +17,7 @@ from sentinelrouter.sentinelrouter.clients import (
 async def test_deepseek_api_connection():
     """
     Minimal integration test: Verify DeepSeek API connection works.
-    
+
     Token usage: ~20 tokens (minimal cost: ~$0.00003)
     """
     api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -47,7 +47,7 @@ async def test_deepseek_api_connection():
 async def test_anthropic_api_connection():
     """
     Minimal integration test: Verify Anthropic API connection works.
-    
+
     Token usage: ~20 tokens (minimal cost: ~$0.00006)
     """
     api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -71,4 +71,3 @@ async def test_anthropic_api_connection():
     print(
         f"✅ Anthropic API test passed - Used {response.usage['total_tokens']} tokens, Cost: ${response.cost:.6f}"
     )
-
