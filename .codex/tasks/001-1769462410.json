@@ -1,11 +1,12 @@
 {
-  "created_at": "2026-01-26T21:04:42.225225Z",
+  "created_at": "2026-01-26T21:20:18.205705Z",
   "definition_of_done": [
     "Create .github/workflows/pr-validation.yml with unit tests, integration tests, linting, and type checking",
     "Create .github/workflows/release.yml that builds Docker images on merge to main or tag push",
     "Create .github/workflows/deploy-staging.yml for manual staging deployment",
     "Update README.md with CI/CD setup instructions",
-    "Configure all workflows to use GitHub Secrets for sensitive data"
+    "Configure GitHub Secrets for API keys and deployment credentials",
+    "Set up branch protection requiring CI to pass before merging to main"
   ],
   "delta_allowed": true,
   "delta_depth": 0,
@@ -21,24 +22,23 @@
     "delta_depth": 0,
     "is_delta_task": false,
     "issue_id": "001",
-    "task_id": "001-1769461473"
+    "task_id": "001-1769462410"
   },
   "non_goals": [
-    "Setting up production deployment",
-    "Configuring branch protection rules",
-    "Creating new integration tests",
-    "Modifying application code",
-    "Setting up external CI/CD services"
+    "Production deployment automation",
+    "Multi-cloud deployment setup",
+    "Performance benchmarking in CI",
+    "Custom Docker registry setup",
+    "Database migration automation"
   ],
   "required_tests": [
-    "PR validation workflow runs on pull request to main",
+    "PR validation workflow runs on all pull requests",
     "Unit tests pass in PR validation",
-    "Integration tests pass in PR validation",
+    "Integration tests pass in PR validation (using secrets)",
     "Linting and type checking pass in PR validation",
-    "Release workflow triggers on merge to main",
-    "Docker image builds successfully in release workflow",
+    "Release workflow builds Docker images successfully",
     "Staging deployment workflow can be manually triggered"
   ],
-  "task_id": "001-1769461473",
+  "task_id": "001-1769462410",
   "test_command": ""
 }

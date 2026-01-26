@@ -176,7 +176,7 @@ SentinelRouter uses GitHub Actions for PR validation, release builds, and manual
 
 ### Workflows
 
-- **PR validation** (`.github/workflows/pr-validation.yml`): Runs on pull requests to `main`. It checks formatting (Black), type checking (mypy), unit tests, and integration tests.
+- **PR validation** (`.github/workflows/pr-validation.yml`): Runs on all pull requests. It checks formatting (Black), type checking (mypy with relaxed settings), unit tests, and integration tests (only when required secrets are present).
 - **Release build** (`.github/workflows/release.yml`): Runs on pushes to `main` and tag pushes. Builds a Docker image to verify the release is buildable.
 - **Staging deploy** (`.github/workflows/deploy-staging.yml`): Manual workflow for staging deployments.
 
@@ -205,7 +205,7 @@ Add the following repository secrets in **Settings -> Secrets and variables -> A
 - `DOCKER_REGISTRY_USERNAME` - Registry username
 - `DOCKER_REGISTRY_PASSWORD` - Registry password or token
 
-Integration tests in PR validation require the API keys listed above. For forks, you may need to skip integration tests or add dummy secrets in a forked repo.
+Integration tests in PR validation require the API keys listed above. If secrets are missing (common in forks), the integration test step is skipped. To enforce integration tests, configure the secrets in the target repository.
 
 ### Branch Protection
 
@@ -214,7 +214,7 @@ To require CI to pass before merging:
 1. Go to **Settings -> Branches**.
 2. Add a protection rule for `main`.
 3. Enable **Require status checks to pass before merging**.
-4. Select the **PR Validation** workflow as a required check.
+4. Select the **PR Validation / validate** check as a required status check.
 
 ## Supported Providers
 
