@@ -39,7 +39,6 @@ jobs:
           bash run_tests.sh --unit
 
       - name: Integration tests
-        if: secrets.DEEPSEEK_API_KEY != ''
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
