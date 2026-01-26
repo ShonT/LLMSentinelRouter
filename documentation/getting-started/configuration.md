@@ -6,18 +6,18 @@ SentinelRouter uses a unified configuration system that combines a JSON configur
 
 The configuration system is designed to be:
 
-- **Centralized**: All settings are defined in a single JSON file (`config/models_config.json`).
-- **Hierarchical**: Settings are organized by system, model, judge, and routing.
-- **Dynamic**: Many settings can be updated at runtime via the dashboard or API.
+- **Centralized**: Runtime routing and client creation use `config/sentinel_config.json`.
+- **Hierarchical**: Settings are organized by keys, key instances, models, judge, and routing.
+- **Dynamic**: The runtime config reloads on file changes (hot-swap).
 - **Validated**: All configuration is validated using Pydantic schemas.
 
 ## Configuration Sources
 
 SentinelRouter loads configuration from three sources, in order of precedence:
 
-1. **Environment Variables** – Highest priority, used for secrets and deployment‑specific overrides.
-2. **`models_config.json`** – Primary configuration file defining models, limits, pricing, and routing.
-3. **Session Defaults** – Default values for sessions (tier, judge usage, session‑ID strategy).
+1. **`sentinel_config.json`** – Primary runtime config for keys, routing, and model definitions.
+2. **Environment Variables** – Used for secrets and deployment‑specific overrides (via `${ENV}` placeholders).
+3. **`models_config.json`** – Legacy config used during migration and for persisted runtime state.
 
 ## Environment Variables
 
@@ -46,75 +46,77 @@ DATABASE_URL=sqlite:///./data/sentinelrouter.db
 
 See `.env.example` for a complete list.
 
-## Unified Configuration File
+## Runtime Configuration (`sentinel_config.json`)
 
-The main configuration file is `config/models_config.json`. It is structured as follows:
+The primary runtime configuration file is `config/sentinel_config.json`:
+
+Set `SENTINEL_CONFIG_PATH` to override the default location.
 
 ```json
 {
-  "system_settings": { ... },
+  "keys": { ... },
+  "key_instances": { ... },
   "models": { ... },
-  "judge_config": { ... },
-  "routing_order_config": { ... }
+  "routing_policy": { ... },
+  "judge": { ... },
+  "semantic_cache": { ... }
 }
 ```
 
-### System Settings
+### Keys & Key Instances
 
-`system_settings` defines global behavior:
+Keys are stored once and referenced by key instances. Key instances include priorities for failover:
 
 ```json
-"system_settings": {
-  "persistence_interval_seconds": 5,
-  "default_routing_strategy": "waterfall",
-  "timezone": "UTC",
-  "session_defaults": {
-    "default_session_id": "default-uuid-001",
-    "default_tier": "free",
-    "default_use_judge": null,
-    "session_id_strategy": "uuid"
-  }
+"keys": {
+  "deepseek_key_1": { "type": "deepseek", "value": "${DEEPSEEK_API_KEY}" }
+},
+"key_instances": {
+  "deepseek_primary": { "key_ref": "deepseek_key_1", "priority": 0 }
 }
 ```
 
-- **`persistence_interval_seconds`**: How often the StateManager writes dirty state to disk.
-- **`default_routing_strategy`**: Either `"waterfall"` (try weak models first) or `"priority"` (use model priority groups).
-- **`session_defaults`**: Default values for new sessions (see below).
+### Models
 
-### Model Configuration
-
-Each model is defined under the `models` key. Example for DeepSeek Chat:
+Each model references one or more key instances:
 
 ```json
 "deepseek-chat": {
-  "display_name": "DeepSeek Chat",
+  "enabled": true,
   "provider": "deepseek",
-  "model_key": "deepseek-chat",
-  "status": "ACTIVE",
-  "capabilities": { ... },
-  "routing": { ... },
-  "limits": { ... },
-  "free_tier_limits": { ... },
-  "paid_tier_limits": { ... },
-  "pricing": { ... },
-  "cost": { ... },
-  "state": { ... }
+  "model_id": "deepseek-chat",
+  "key_instances": ["deepseek_primary"],
+  "pricing": { "input_cost_per_m": 0.14, "output_cost_per_m": 0.28 },
+  "limits": { "requests_per_minute": 60, "requests_per_day": 10000, "tokens_per_minute": 1000000 }
 }
 ```
 
 #### Key Fields
 
-- **`display_name`**: Human‑readable name.
-- **`provider`**: One of `deepseek`, `anthropic`, `gemini`, `groq`, `openrouter`.
-- **`model_key`**: Provider‑specific model identifier (e.g., `"deepseek-chat"`, `"llama-3.1-8b-instant"`).
-- **`status`**: `"ACTIVE"` or `"BANNED"`.
-- **`capabilities`**: Supported modalities and context window.
-- **`routing`**: Priority group (`fast_tier` or `strong_tier`) and order within that group.
-- **`limits`**: Global rate limits (requests per minute, per day, tokens per minute).
-- **`free_tier_limits` / `paid_tier_limits`**: Tier‑specific limits (used when a session’s tier matches).
-- **`pricing`**: Cost per million tokens (`input_cost_per_m`, `output_cost_per_m`) and optional usage tiers.
-- **`cost`**: Simple per‑call and per‑token cost (alternative to pricing tiers).
-- **`state`**: Runtime state (current RPM, requests today, etc.) – managed by the system.
+- **`provider`**: Provider type (`deepseek`, `anthropic`, `gemini`, `groq`, `openrouter`).
+- **`model_id`**: Provider model identifier (e.g., `deepseek-chat`).
+- **`key_instances`**: Ordered list of key instances for priority and failover.
+- **`pricing`**: Input/output cost per million tokens.
+- **`limits`**: Requests per minute/day and tokens per minute.
+
+### Routing Policy
+
+`routing_policy` defines weak and strong tiers for the router:
+
+```json
+"routing_policy": {
+  "weak_tier": { "order": ["deepseek-chat"] },
+  "strong_tier": { "order": ["claude-3-opus"] }
+}
+```
+
+## Legacy Configuration (`models_config.json`)
+
+During migration, `config/models_config.json` continues to work:
+
+- If `sentinel_config.json` is present, it is used for routing and client creation.
+- If `sentinel_config.json` is missing, SentinelRouter derives runtime config from `models_config.json`.
+- Keys are sourced from environment variables in legacy mode (single key instance per provider).
 
 ### Judge Configuration
 
@@ -170,49 +172,65 @@ Session defaults are set in `system_settings.session_defaults` and can be overri
 
 ## Adding a New Model
 
-To add a new LLM provider:
+To add a new model in `sentinel_config.json`:
 
-1. **Define the model in `models_config.json`**:
+1. **Add the key (or reuse an existing key)**:
 
    ```json
-   "my-new-model": {
-     "display_name": "My New Model",
-     "provider": "anthropic",  // or deepseek, gemini, groq, openrouter
-     "model_key": "claude-3-5-sonnet-20241022",
-     "status": "ACTIVE",
-     "capabilities": {
-       "modality": ["text"],
-       "context_window": 200000
-     },
-     "routing": {
-       "priority_group": "strong_tier",
-       "order": 2
-     },
-     "limits": { ... },
-     "free_tier_limits": { ... },
-     "paid_tier_limits": { ... },
-     "pricing": { ... },
-     "cost": { ... }
+   "keys": {
+     "anthropic_key_1": {
+       "type": "anthropic",
+       "value": "${ANTHROPIC_API_KEY}"
+     }
    }
    ```
 
-2. **Ensure the provider client is implemented** in `sentinelrouter/sentinelrouter/clients.py`. If not, you may need to extend the client registry.
+2. **Add a key instance**:
 
-3. **Add the model to the routing order** in `routing_order_config.strong_models` or `weak_models`.
+   ```json
+   "key_instances": {
+     "anthropic_primary": {
+       "key_ref": "anthropic_key_1",
+       "priority": 0
+     }
+   }
+   ```
 
-4. **Restart the server** (or use the dashboard to reload configuration).
+3. **Define the model and add it to a routing tier**:
+
+   ```json
+   "models": {
+     "claude-3-5-sonnet": {
+       "enabled": true,
+       "provider": "anthropic",
+       "model_id": "claude-3-5-sonnet-20241022",
+       "key_instances": ["anthropic_primary"],
+       "pricing": { "input_cost_per_m": 3.0, "output_cost_per_m": 15.0 },
+       "limits": { "requests_per_minute": 60, "requests_per_day": 10000, "tokens_per_minute": 120000 }
+     }
+   },
+   "routing_policy": {
+     "strong_tier": { "order": ["claude-3-5-sonnet"] }
+   }
+   ```
+
+4. **Ensure the provider client is implemented** in `sentinelrouter/sentinelrouter/clients.py`.
+
+5. **Save the file** – the router reloads it automatically.
 
 ## Configuration Validation
 
-The configuration is validated at startup using the Pydantic schemas in `sentinelrouter/schemas/config_models.py`. Common validation errors include:
+The runtime configuration is validated at startup using the Pydantic schema in `sentinelrouter/schemas/sentinel_config.py`. Common validation errors include:
 
 - Missing required fields.
-- Invalid enum values (e.g., `provider` not in `["deepseek","anthropic","gemini"]`).
+- Invalid enum values (e.g., `provider` not in the supported provider list).
 - Negative rate limits.
 
 If the configuration is invalid, the server will fail to start with a descriptive error.
 
 ## Runtime Configuration Updates
+
+SentinelRouter reloads `sentinel_config.json` on change for routing and client creation. This enables key rotation and model changes without a restart.
 
 The StateManager allows certain configuration values to be updated at runtime:
 
@@ -233,12 +251,13 @@ When a setting is defined in multiple places, the following precedence applies (
 1. **Request‑level headers** (e.g., `X-Session-Tier`, `X-Use-Judge`)
 2. **Session‑level settings** (stored in the database)
 3. **Environment variables** (for API keys, server settings)
-4. **`models_config.json`** (unified configuration file)
-5. **System defaults** (hard‑coded in `config.py`)
+4. **`sentinel_config.json`** (runtime configuration file)
+5. **`models_config.json`** (legacy config and runtime state)
+6. **System defaults** (hard‑coded in `config.py`)
 
 ## Example: Full Configuration Snippet
 
-See the default `config/models_config.json` for a complete example with DeepSeek, Claude, and Gemini models.
+See `config/sentinel_config_demo.json` for a complete example with keys, key instances, and routing tiers.
 
 ## Next Steps
 

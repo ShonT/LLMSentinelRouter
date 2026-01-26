@@ -33,7 +33,9 @@ class DynamicThreshold:
         self.target_rate = target_rate or settings.target_escalation_rate
         self.window_size = window_size or settings.rolling_window_size
         self.threshold = initial_threshold or settings.initial_threshold
-        self.decision_window: deque[bool] = deque(maxlen=self.window_size)  # True for strong, False for weak
+        self.decision_window: deque[bool] = deque(
+            maxlen=self.window_size
+        )  # True for strong, False for weak
 
         logger.info(
             f"DynamicThreshold initialized: target={self.target_rate}, "
@@ -45,7 +47,9 @@ class DynamicThreshold:
         Record a routing decision (True = strong model, False = weak model).
         """
         self.decision_window.append(used_strong)
-        logger.debug(f"Added decision: strong={used_strong}. Window size={len(self.decision_window)}")
+        logger.debug(
+            f"Added decision: strong={used_strong}. Window size={len(self.decision_window)}"
+        )
 
     def current_escalation_rate(self) -> float:
         """

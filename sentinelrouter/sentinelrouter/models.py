@@ -24,12 +24,16 @@ Base = declarative_base()
 class Session(Base):
     """
     Represents a client session with a budget limit and tier.
-    
+
     Tier determines rate limits:
     - 'free': Lower rate limits (default)
     - 'paid': Higher rate limits
     - 'premium': Highest rate limits
+
+    Uses version column for optimistic concurrency control to prevent
+    race conditions during budget updates.
     """
+
     __tablename__ = "sessions"
 
     session_id = Column(String, primary_key=True)
@@ -39,6 +43,9 @@ class Session(Base):
     max_cost_per_session = Column(Float, default=10.0)
     current_cost = Column(Float, default=0.0)
     is_active = Column(Boolean, default=True)
+    version = Column(
+        Integer, default=0, nullable=False
+    )  # For optimistic concurrency control
 
     # Relationships
     routing_decisions = relationship("RoutingDecision", back_populates="session")
@@ -51,6 +58,7 @@ class RoutingDecision(Base):
     """
     Audit trail of every routing decision.
     """
+
     __tablename__ = "routing_decisions"
 
     decision_id = Column(Integer, primary_key=True, autoincrement=True)
@@ -59,7 +67,11 @@ class RoutingDecision(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
     model_used = Column(String)
     complexity_score = Column(Float)
-    cost_incurred = Column(Float)
+    cost_incurred = Column(Float)  # Final cost used (canonical)
+    cost_source = Column(
+        String, default="unknown"
+    )  # "provider" | "computed" | "unknown"
+    computed_cost = Column(Float, nullable=True)  # Computed fallback for audit/debug
     prompt_hash = Column(String)
     impact_scope = Column(String, nullable=True)
     reason = Column(Text, nullable=True)
@@ -71,7 +83,7 @@ class RoutingDecision(Base):
 
     # NEW: Latency tracking
     request_latency_ms = Column(Float, default=0.0)  # Total end-to-end time
-    model_latency_ms = Column(Float, default=0.0)    # Time in LLM API call
+    model_latency_ms = Column(Float, default=0.0)  # Time in LLM API call
     judge_latency_ms = Column(Float, nullable=True)  # Judge invocation time (if used)
 
     # Relationships
@@ -82,6 +94,7 @@ class CycleNode(Base):
     """
     Semantic hashes for cycle detection.
     """
+
     __tablename__ = "cycle_detection"
 
     hash_id = Column(Integer, primary_key=True, autoincrement=True)
@@ -98,6 +111,7 @@ class EscalationLog(Base):
     """
     Log of threshold adjustments.
     """
+
     __tablename__ = "escalation_log"
 
     log_id = Column(Integer, primary_key=True, autoincrement=True)
@@ -116,6 +130,7 @@ class EscalationTrace(Base):
     """
     Detailed trace of strong model escalations showing full decision path.
     """
+
     __tablename__ = "escalation_traces"
 
     trace_id = Column(Integer, primary_key=True, autoincrement=True)
@@ -147,7 +162,7 @@ class EscalationTrace(Base):
 
     # Routing decision trace
     initial_route_decision = Column(String)  # 'weak' or 'strong'
-    final_route_decision = Column(String)    # May differ if timeout escalation
+    final_route_decision = Column(String)  # May differ if timeout escalation
     escalation_reason = Column(Text, nullable=True)
 
     # Final model used
@@ -203,4 +218,8 @@ class SemanticCacheStats(Base):
 
 # Helpful indexes for faster lookups
 Index("ix_semantic_cache_stats_last_called", SemanticCacheStats.last_called_at)
-Index("ix_semantic_cache_entries_semantic_hash_created", SemanticCacheEntry.semantic_hash, SemanticCacheEntry.created_at)
+Index(
+    "ix_semantic_cache_entries_semantic_hash_created",
+    SemanticCacheEntry.semantic_hash,
+    SemanticCacheEntry.created_at,
+)

@@ -12,6 +12,15 @@ gunicorn==21.2.0
 # Optional for cycle detection
 networkx==3.1  # optional, for cycle detection
 
+# Optional for semantic processing (VECTORDB_LOCAL strategy)
+onnxruntime==1.16.0  # Local vector embeddings
+transformers==4.36.0  # Local vector embeddings
+optimum[onnxruntime]==1.16.0  # Model optimization
+
+# Optional for vector storage (LanceDB)
+lancedb==0.4.0  # Persistent vector storage
+pyarrow==14.0.0  # Persistent vector storage
+
 # Environment management
 python-dotenv==1.0.0
 

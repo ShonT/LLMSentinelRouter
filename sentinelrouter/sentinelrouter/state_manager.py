@@ -1,8 +1,9 @@
 """
-State Manager with write‑behind persistence.
+State Manager with write‑behind persistence and Write-Ahead Logging (WAL).
 
 Holds the unified configuration in memory, tracks dirty state, and periodically
-flushes changes to disk using atomic writes.
+flushes changes to disk using atomic writes. Uses WAL to ensure durability
+and crash recovery.
 """
 
 import asyncio
@@ -10,9 +11,10 @@ import json
 import logging
 import os
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Dict, Set, Optional, Any, Union
+from typing import Dict, Set, Optional, Any, Union, List
 
 from .config import get_unified_config, get_settings
 from ..schemas.config_models import (
@@ -26,9 +28,134 @@ from ..schemas.config_models import (
 logger = logging.getLogger(__name__)
 
 
+class WriteAheadLog:
+    """
+    Simple Write-Ahead Log for state changes.
+
+    Each WAL entry contains:
+    - timestamp: When the change was made
+    - model_id: Which model was modified
+    - field: Which field was changed
+    - old_value: Previous value
+    - new_value: New value
+
+    WAL entries are appended before any in-memory change is made,
+    ensuring crash recovery is possible.
+    """
+
+    def __init__(self, wal_path: str):
+        self.wal_path = wal_path
+        self.lock = asyncio.Lock()
+        self._ensure_wal_file()
+
+    def _ensure_wal_file(self) -> None:
+        """Create WAL file if it doesn't exist."""
+        if not os.path.exists(self.wal_path):
+            os.makedirs(os.path.dirname(self.wal_path), exist_ok=True)
+            with open(self.wal_path, "w", encoding="utf-8") as f:
+                f.write("")  # Empty file
+
+    async def append(
+        self, model_id: str, field: str, old_value: Any, new_value: Any
+    ) -> int:
+        """
+        Append an entry to the WAL. Returns the sequence number.
+        """
+        async with self.lock:
+            entry = {
+                "seq": int(time.time() * 1000000),  # Microsecond timestamp as seq
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "model_id": model_id,
+                "field": field,
+                "old": old_value,
+                "new": new_value,
+            }
+            with open(self.wal_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+            return entry["seq"]
+
+    async def get_uncommitted_entries(self, since_seq: int = 0) -> List[Dict]:
+        """Get all WAL entries since given sequence number."""
+        async with self.lock:
+            entries = []
+            if not os.path.exists(self.wal_path):
+                return entries
+            with open(self.wal_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        if entry.get("seq", 0) > since_seq:
+                            entries.append(entry)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Skipping malformed WAL entry: {line[:100]}")
+            return entries
+
+    async def truncate(self) -> None:
+        """Clear the WAL after a successful flush."""
+        async with self.lock:
+            with open(self.wal_path, "w", encoding="utf-8") as f:
+                f.write("")
+            logger.debug("WAL truncated after successful flush")
+
+    async def replay(self, config: UnifiedConfig) -> int:
+        """
+        Replay WAL entries onto the config.
+        Returns the number of entries replayed.
+        """
+        entries = await self.get_uncommitted_entries()
+        replayed = 0
+        for entry in entries:
+            model_id = entry.get("model_id")
+            field = entry.get("field")
+            new_value = entry.get("new")
+
+            if model_id and field and model_id in config.models:
+                model = config.models[model_id]
+                if hasattr(model.state, field):
+                    # Handle datetime fields specially
+                    if isinstance(new_value, str) and "T" in new_value:
+                        try:
+                            new_value = datetime.fromisoformat(
+                                new_value.replace("Z", "+00:00")
+                            )
+                        except ValueError:
+                            pass
+
+                    # Apply the change
+                    state_dict = model.state.model_dump()
+                    state_dict[field] = new_value
+                    new_state = ModelState(**state_dict)
+
+                    updated_model = ModelConfig(
+                        display_name=model.display_name,
+                        provider=model.provider,
+                        model_definition=model.model_definition,
+                        model_key=model.model_key,
+                        status=model.status,
+                        status_valid_till=model.status_valid_till,
+                        capabilities=model.capabilities,
+                        routing=model.routing,
+                        limits=model.limits,
+                        free_tier_limits=model.free_tier_limits,
+                        paid_tier_limits=model.paid_tier_limits,
+                        pricing=model.pricing,
+                        cost=model.cost,
+                        state=new_state,
+                    )
+                    config.models[model_id] = updated_model
+                    replayed += 1
+
+        if replayed > 0:
+            logger.info(f"WAL recovery: replayed {replayed} entries")
+        return replayed
+
+
 class StateManager:
     """
-    Manages in‑memory model state with write‑behind persistence.
+    Manages in‑memory model state with write‑behind persistence and WAL.
 
     Attributes:
         config: The current unified configuration (immutable part).
@@ -36,14 +163,34 @@ class StateManager:
         lock: asyncio.Lock for thread‑safe mutations.
         task: Background task that runs the periodic flush.
         stop_event: Event to signal the background task to stop.
+        wal: Write-ahead log for crash recovery.
     """
 
-    def __init__(self, config: UnifiedConfig):
+    def __init__(self, config: UnifiedConfig, wal_path: Optional[str] = None):
         self.config = config
         self.dirty: Set[str] = set()
         self.lock = asyncio.Lock()
         self.task: Optional[asyncio.Task] = None
         self.stop_event = asyncio.Event()
+
+        # Initialize WAL
+        if wal_path is None:
+            config_path = get_settings().models_config_path
+            wal_path = os.path.splitext(config_path)[0] + ".wal"
+        self.wal = WriteAheadLog(wal_path)
+        self._wal_initialized = False
+
+    async def _ensure_wal_recovery(self) -> None:
+        """Replay WAL entries on first access if needed."""
+        if self._wal_initialized:
+            return
+        self._wal_initialized = True
+        replayed = await self.wal.replay(self.config)
+        if replayed > 0:
+            # Mark all models as dirty since we recovered from WAL
+            for model_id in self.config.models:
+                self.dirty.add(model_id)
+            logger.info(f"WAL recovery complete, marked {replayed} models dirty")
 
     def start(self) -> None:
         """Start the background flush task."""
@@ -69,31 +216,39 @@ class StateManager:
 
     async def _flush_dirty(self) -> None:
         """
-        Flush all dirty model states to disk.
+        Flush all dirty model states to disk with WAL protection.
 
         This method:
-          1. Acquires the lock and copies the dirty set.
+          1. Acquires the lock and copies the dirty set (atomically).
           2. Writes the entire config to a temporary file.
           3. Atomically renames the temporary file to the target path.
-          4. Clears the dirty set.
+          4. Truncates the WAL after successful write.
+          5. Clears the dirty set only after both writes succeed.
         """
         async with self.lock:
             if not self.dirty:
                 return
             dirty_copy = set(self.dirty)
-            self.dirty.clear()
+            # Keep dirty set until AFTER successful write
+            # This prevents data loss if write fails mid-way
 
         try:
             # Write the entire config (not just dirty models) to ensure consistency
             await self._atomic_write()
+
+            # Only truncate WAL after successful config write
+            await self.wal.truncate()
+
+            # Now clear dirty set - both writes succeeded
+            async with self.lock:
+                self.dirty -= dirty_copy  # Only clear what we flushed
+
             logger.debug(
                 f"Flushed dirty models {dirty_copy} to {get_settings().models_config_path}"
             )
         except Exception as e:
-            # Re-add dirty models because the write failed
-            async with self.lock:
-                self.dirty.update(dirty_copy)
-            logger.error(f"Failed to flush dirty state: {e}")
+            # Dirty set was NOT cleared, so changes will be retried
+            logger.error(f"Failed to flush dirty state (will retry): {e}")
 
     async def _atomic_write(self) -> None:
         """Write the current config to disk atomically."""
@@ -126,21 +281,39 @@ class StateManager:
         self, model_id: str, **updates: Dict[str, Any]
     ) -> bool:
         """
-        Update the state of a model and mark it as dirty.
+        Update the state of a model with WAL protection.
 
         Updates are applied to the ModelState object. Only fields that exist
         in ModelState can be updated.
 
+        The update is written to WAL BEFORE applying to memory, ensuring
+        crash recovery is possible.
+
         Returns True if the update succeeded, False if the model does not exist.
         """
+        await self._ensure_wal_recovery()
+
         async with self.lock:
             model = self.config.models.get(model_id)
             if model is None:
                 logger.warning(f"Attempted to update non‑existent model {model_id}")
                 return False
 
+            # Get current state for WAL entries
+            old_state_dict = model.state.model_dump()
+
+            # Write to WAL BEFORE applying changes (write-ahead)
+            for key, value in updates.items():
+                if key in old_state_dict:
+                    await self.wal.append(
+                        model_id=model_id,
+                        field=key,
+                        old_value=old_state_dict[key],
+                        new_value=value,
+                    )
+
             # Apply updates to the state
-            state_dict = model.state.model_dump()
+            state_dict = old_state_dict.copy()
             for key, value in updates.items():
                 if key in state_dict:
                     state_dict[key] = value
@@ -222,7 +395,7 @@ class StateManager:
     async def delete_model(self, model_id: str) -> bool:
         """
         Soft delete a model by marking it as BANNED.
-        
+
         This preserves the model in historical logs and routing decisions
         while preventing it from being used for new requests.
         """
@@ -230,7 +403,7 @@ class StateManager:
             if model_id not in self.config.models:
                 logger.warning(f"Model {model_id} does not exist")
                 return False
-            
+
             # Soft delete: mark as BANNED instead of removing
             self.config.models[model_id].status = "BANNED"
             self.config.models[model_id].status_valid_till = None  # Permanent ban
@@ -334,7 +507,9 @@ class StateManager:
                 if key in config_dict:
                     config_dict[key] = value
                 else:
-                    logger.warning(f"Ignoring unknown field {key} for routing order config")
+                    logger.warning(
+                        f"Ignoring unknown field {key} for routing order config"
+                    )
             new_routing_order_config = RoutingOrderConfig(**config_dict)
             self.config.routing_order_config = new_routing_order_config
             self.dirty.add("__config__")
@@ -351,26 +526,28 @@ class StateManager:
         async with self.lock:
             current_defaults = self.config.system_settings.session_defaults
             defaults_dict = current_defaults.model_dump()
-            
+
             # Apply updates
             for key, value in updates.items():
                 if key in defaults_dict:
                     defaults_dict[key] = value
                 else:
                     logger.warning(f"Ignoring unknown field {key} for session defaults")
-            
+
             # Import SessionDefaults here to avoid circular import
             from ..schemas.config_models import SessionDefaults
+
             new_session_defaults = SessionDefaults(**defaults_dict)
-            
+
             # Update system settings with new session defaults
             system_dict = self.config.system_settings.model_dump()
-            system_dict['session_defaults'] = new_session_defaults.model_dump()
-            
+            system_dict["session_defaults"] = new_session_defaults.model_dump()
+
             from ..schemas.config_models import SystemSettings
+
             new_system_settings = SystemSettings(**system_dict)
             self.config.system_settings = new_system_settings
-            
+
             self.dirty.add("__config__")
             logger.info(f"Updated session defaults: {updates}")
             return True
@@ -380,15 +557,16 @@ class StateManager:
         async with self.lock:
             current_defaults = self.config.system_settings.session_defaults
             new_id = current_defaults.regenerate_session_id()
-            
+
             # Update system settings with regenerated ID
             system_dict = self.config.system_settings.model_dump()
-            system_dict['session_defaults']['default_session_id'] = new_id
-            
+            system_dict["session_defaults"]["default_session_id"] = new_id
+
             from ..schemas.config_models import SystemSettings
+
             new_system_settings = SystemSettings(**system_dict)
             self.config.system_settings = new_system_settings
-            
+
             self.dirty.add("__config__")
             logger.info(f"Regenerated session ID: {new_id}")
             return new_id
@@ -401,26 +579,28 @@ _state_manager: Optional[StateManager] = None
 async def get_state_manager(reload: bool = False) -> StateManager:
     """
     Get or create the global StateManager instance.
-    
+
     Args:
         reload: If True, reload the config from disk even if StateManager exists.
     """
     global _state_manager
-    
+
     if reload and _state_manager is not None:
         # Reload config from disk
         from .config import load_unified_config
+
         new_config = load_unified_config()
         _state_manager.config = new_config
         logger.debug("StateManager config reloaded from disk")
-    
+
     if _state_manager is None:
         from .config import load_unified_config
+
         config = load_unified_config()
         _state_manager = StateManager(config)
         _state_manager.start()
         logger.info("StateManager initialized")
-    
+
     return _state_manager
 
 

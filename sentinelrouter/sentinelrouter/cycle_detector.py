@@ -20,6 +20,7 @@ from .semantic_hash import compute_simhash, hamming_distance
 
 logger = logging.getLogger(__name__)
 
+
 class CycleDetector:
     """
     Detects cycles in a session's request/response graph using SimHash.
@@ -32,12 +33,28 @@ class CycleDetector:
         - Implement pruning of old nodes (keep last 100 interactions)
     """
 
-    def __init__(self, session_id: str, window_size: int = None, simhash_threshold: int = None, repetition_threshold: int = 4):
+    def __init__(
+        self,
+        session_id: str,
+        window_size: int = None,
+        simhash_threshold: int = None,
+        repetition_threshold: int = 4,
+    ):
         settings = get_settings()
         self.session_id = session_id
-        self.window_size = window_size if window_size is not None else settings.cycle_detection_window_size
-        self.simhash_threshold = simhash_threshold if simhash_threshold is not None else settings.cycle_detection_simhash_threshold
-        self.repetition_threshold = repetition_threshold  # Only escalate after N repetitions
+        self.window_size = (
+            window_size
+            if window_size is not None
+            else settings.cycle_detection_window_size
+        )
+        self.simhash_threshold = (
+            simhash_threshold
+            if simhash_threshold is not None
+            else settings.cycle_detection_simhash_threshold
+        )
+        self.repetition_threshold = (
+            repetition_threshold  # Only escalate after N repetitions
+        )
 
         if nx is None:
             logger.warning("networkx not installed. Cycle detection will be disabled.")
@@ -48,7 +65,9 @@ class CycleDetector:
         # Keep a sliding window of recent hashes for fast lookup
         self.recent_hashes: List[Tuple[int, datetime]] = []
         # Track only SUCCESSFUL prompts (only added via add_request_response)
-        self.successful_prompts: List[Tuple[int, datetime]] = []  # Track prompt hashes from successful responses
+        self.successful_prompts: List[
+            Tuple[int, datetime]
+        ] = []  # Track prompt hashes from successful responses
         self.last_hash: Optional[int] = None
         self.last_response: Optional[str] = None
 
@@ -59,7 +78,9 @@ class CycleDetector:
         combined = prompt + "\n---\n" + response
         return compute_simhash(combined)
 
-    def add_request_response(self, prompt: str, response: str, timestamp: Optional[datetime] = None) -> bool:
+    def add_request_response(
+        self, prompt: str, response: str, timestamp: Optional[datetime] = None
+    ) -> bool:
         """
         Add a request‑response pair to the graph and check for cycles.
 
@@ -92,7 +113,7 @@ class CycleDetector:
 
         # Store the last response for future cycle detection
         self.last_response = response
-        
+
         # Add this prompt to successful prompts history (only on successful completion)
         prompt_hash = compute_simhash(prompt)
         self.successful_prompts.append((prompt_hash, ts))
@@ -108,10 +129,10 @@ class CycleDetector:
         """
         Detect if the current prompt is very similar to recent SUCCESSFUL prompts,
         indicating a potential repetitive cycle.
-        
+
         Only escalates if the prompt has been repeated >= repetition_threshold times.
         Only considers prompts from successful requests (tracked via add_request_response).
-        
+
         Enhanced with two filters:
         1. Only checks last 10 prompts (not entire window of 100)
         2. Only counts prompts from last 15 minutes
@@ -120,25 +141,28 @@ class CycleDetector:
         """
         # Compute hash of just the prompt (not combined with old response)
         prompt_hash = compute_simhash(prompt)
-        
+
         # Get current timestamp for time-based filtering
         current_time = datetime.utcnow()
-        time_window = timedelta(minutes=15)  # Only consider prompts from last 15 minutes
+        time_window = timedelta(
+            minutes=15
+        )  # Only consider prompts from last 15 minutes
         recent_prompt_limit = 10  # Only check last 10 prompts
-        
+
         # Get recent prompts (last 10) within time window (last 15 minutes)
         recent_prompts = [
-            (ph, ts) for ph, ts in self.successful_prompts[-recent_prompt_limit:]
+            (ph, ts)
+            for ph, ts in self.successful_prompts[-recent_prompt_limit:]
             if (current_time - ts) <= time_window
         ]
-        
+
         # Count how many times this prompt (or similar prompts) appear in recent history
         repetition_count = 0
         for existing_prompt_hash, ts in recent_prompts:
             dist = hamming_distance(prompt_hash, existing_prompt_hash)
             if dist < self.simhash_threshold:
                 repetition_count += 1
-        
+
         # Only escalate if we've seen this prompt 4+ times in recent history
         if repetition_count >= self.repetition_threshold:
             logger.warning(
@@ -147,7 +171,7 @@ class CycleDetector:
                 f"(within 15 min window, threshold={self.repetition_threshold})"
             )
             return True
-        
+
         logger.debug(
             f"Prompt similarity check for session {self.session_id}: "
             f"{repetition_count} repetitions in last {len(recent_prompts)} prompts "
@@ -240,7 +264,7 @@ class CycleDetector:
         self.last_hash = None
         self.last_response = None
         logger.info(f"Cycle detector reset for session {self.session_id}")
-    
+
     def clear_last_response(self):
         """Clear the last response without resetting the entire detector.
         Used when a request fails to prevent stale response data."""

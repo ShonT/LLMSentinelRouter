@@ -1,0 +1,23 @@
+{
+  "_comment": "Invalid config - model appears in both tiers",
+  "keys": {
+    "key1": {"type": "groq", "value": "test-key"}
+  },
+  "key_instances": {
+    "groq_primary": {"key_ref": "key1"}
+  },
+  "models": {
+    "model1": {
+      "enabled": true,
+      "provider": "groq",
+      "model_id": "llama-3.1-8b",
+      "key_instance": "groq_primary",
+      "pricing": {"input_cost_per_m": 0.05, "output_cost_per_m": 0.08},
+      "limits": {"requests_per_minute": 30, "requests_per_day": 1000, "tokens_per_minute": 30000}
+    }
+  },
+  "routing_policy": {
+    "weak_tier": {"order": ["model1"]},
+    "strong_tier": {"order": ["model1"]}
+  }
+}

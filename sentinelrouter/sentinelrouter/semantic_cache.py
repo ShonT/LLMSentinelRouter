@@ -49,7 +49,9 @@ class SemanticCache:
     ):
         self.db = db_session
         self.min_samples = min_samples or get_settings().semantic_cache_min_samples
-        self.confidence_threshold = confidence_threshold or get_settings().semantic_cache_confidence_threshold
+        self.confidence_threshold = (
+            confidence_threshold or get_settings().semantic_cache_confidence_threshold
+        )
         self.ttl_seconds = ttl_seconds or get_settings().semantic_cache_ttl_seconds
         self.max_entries = max_entries or get_settings().semantic_cache_max_entries
 
@@ -164,40 +166,64 @@ class SemanticCache:
         self.db.flush()
         return stats
 
-    def get_stats_for_prompt(self, prompt: str, context: Optional[Any]) -> Optional[SemanticCacheStats]:
+    def get_stats_for_prompt(
+        self, prompt: str, context: Optional[Any]
+    ) -> Optional[SemanticCacheStats]:
         semantic_hash = self.build_semantic_hash(prompt, context)
         return self.db.get(SemanticCacheStats, semantic_hash)
 
     def confidence_for_hash(self, semantic_hash: str) -> float:
+        """
+        Calculate routing confidence based on weak/strong call distribution.
+
+        Confidence is calculated ONLY from weak_calls and strong_calls,
+        excluding calls to other models (which don't inform routing decisions).
+        This prevents false confidence when using models that aren't classified
+        as weak or strong (e.g., backup models, judge models).
+
+        Returns:
+            float: Confidence value between 0.0 and 1.0
+        """
         stats = self.db.get(SemanticCacheStats, semantic_hash)
         if stats is None or stats.total_calls < self.min_samples:
             return 0.0
 
-        other_calls = max(0, stats.total_calls - stats.weak_calls - stats.strong_calls)
-        dominant = max(stats.weak_calls, stats.strong_calls, other_calls)
-        confidence = dominant / stats.total_calls if stats.total_calls else 0.0
+        # Only consider weak and strong calls for routing confidence
+        routable_calls = stats.weak_calls + stats.strong_calls
+
+        if routable_calls == 0:
+            # No routing-relevant calls yet
+            return 0.0
+
+        # Calculate confidence as the proportion of the dominant route
+        dominant = max(stats.weak_calls, stats.strong_calls)
+        confidence = dominant / routable_calls
         return min(1.0, confidence)
 
-    def has_confident_history(self, prompt: str, context: Optional[Any]) -> Tuple[bool, float]:
+    def has_confident_history(
+        self, prompt: str, context: Optional[Any]
+    ) -> Tuple[bool, float]:
         semantic_hash = self.build_semantic_hash(prompt, context)
         confidence = self.confidence_for_hash(semantic_hash)
         return confidence >= self.confidence_threshold, confidence
 
-    def get_recommended_route(self, prompt: str, context: Optional[Any]) -> Optional[str]:
+    def get_recommended_route(
+        self, prompt: str, context: Optional[Any]
+    ) -> Optional[str]:
         """
         Get cache-based routing recommendation if confidence threshold is met.
-        
+
         Returns:
             "weak", "strong", or None if no confident recommendation
         """
         confident, _ = self.has_confident_history(prompt, context)
         if not confident:
             return None
-        
+
         stats = self.get_stats_for_prompt(prompt, context)
         if not stats:
             return None
-        
+
         if stats.weak_calls > stats.strong_calls:
             return "weak"
         elif stats.strong_calls > stats.weak_calls:
@@ -209,10 +235,13 @@ class SemanticCache:
         if stats is None:
             return None
 
-        mean_latency = stats.total_latency_ms / stats.total_calls if stats.total_calls else 0.0
+        mean_latency = (
+            stats.total_latency_ms / stats.total_calls if stats.total_calls else 0.0
+        )
         variance_latency = (
-            (stats.total_latency_ms_sq / stats.total_calls) - (mean_latency ** 2)
-            if stats.total_calls else 0.0
+            (stats.total_latency_ms_sq / stats.total_calls) - (mean_latency**2)
+            if stats.total_calls
+            else 0.0
         )
         # Guard against floating point drift
         variance_latency = max(0.0, variance_latency)
@@ -243,11 +272,19 @@ class SemanticCache:
             .filter(SemanticCacheEntry.created_at < cutoff)
             .delete(synchronize_session=False)
         )
-        stale_stats = self.db.query(SemanticCacheStats).filter(SemanticCacheStats.last_called_at < cutoff).all()
+        stale_stats = (
+            self.db.query(SemanticCacheStats)
+            .filter(SemanticCacheStats.last_called_at < cutoff)
+            .all()
+        )
         for stat in stale_stats:
             self.db.delete(stat)
         if removed_entries or stale_stats:
-            logger.debug("Semantic cache eviction: %s entries, %s stats", removed_entries, len(stale_stats))
+            logger.debug(
+                "Semantic cache eviction: %s entries, %s stats",
+                removed_entries,
+                len(stale_stats),
+            )
 
     def _enforce_capacity(self) -> None:
         if not self.max_entries or self.max_entries <= 0:

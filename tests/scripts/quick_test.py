@@ -11,14 +11,14 @@ url = "http://localhost:8000/v1/chat/completions"
 payload = {
     "model": "gpt-4",
     "messages": [{"role": "user", "content": "Say hello"}],
-    "session_id": "dashboard-test"
+    "session_id": "dashboard-test",
 }
 
 try:
     with httpx.Client(timeout=90.0) as client:
         print("Making request...")
         response = client.post(url, json=payload)
-        
+
         if response.status_code == 200:
             data = response.json()
             print(f"✅ Success!")

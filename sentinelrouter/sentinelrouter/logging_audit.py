@@ -110,6 +110,8 @@ class AuditLogger:
         request_latency_ms: float = 0.0,
         model_latency_ms: float = 0.0,
         judge_latency_ms: Optional[float] = None,
+        cost_source: str = "unknown",
+        computed_cost: Optional[float] = None,
     ) -> None:
         """
         Write a routing decision to the database with token and latency tracking.
@@ -120,6 +122,8 @@ class AuditLogger:
             model_used=model_used,
             complexity_score=complexity_score,
             cost_incurred=cost_incurred,
+            cost_source=cost_source,
+            computed_cost=computed_cost,
             prompt_hash=prompt_hash,
             impact_scope=impact_scope,
             reason=reason,
@@ -176,7 +180,7 @@ class AuditLogger:
             f"Cycle detected in session {session_id}: "
             f"prompt_hash={prompt_hash}, response_hash={response_hash}"
         )
-    
+
     def log_escalation_trace(
         self,
         session_id: str,
@@ -243,12 +247,16 @@ class RequestResponseLogger:
         self.log_dir = log_dir
         self.log_dir.mkdir(exist_ok=True)
 
-    def _generate_filename(self, timestamp: datetime, model_used: str, cost: float) -> str:
+    def _generate_filename(
+        self, timestamp: datetime, model_used: str, cost: float
+    ) -> str:
         """
         Generate filename pattern: {timestamp}_{model_used}_{cost}.json
         Timestamp format: YYYYMMDD_HHMMSS_fff
         """
-        ts_str = timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]  # keep milliseconds (3 digits)
+        ts_str = timestamp.strftime("%Y%m%d_%H%M%S_%f")[
+            :-3
+        ]  # keep milliseconds (3 digits)
         cost_str = f"{cost:.2f}"
         # Replace dots with underscores for safety? Keep dot for decimal.
         # Remove any characters that are not safe for filenames.
@@ -330,7 +338,7 @@ class LoggingAudit:
         """
         start_time = start_time or datetime.utcnow()
         end_time = end_time or datetime.utcnow()
-        
+
         # Calculate request latency from start/end times
         request_latency_ms = (end_time - start_time).total_seconds() * 1000
 
@@ -339,10 +347,14 @@ class LoggingAudit:
         input_tokens = usage.get("prompt_tokens", 0)
         output_tokens = usage.get("completion_tokens", 0)
         total_tokens = usage.get("total_tokens", input_tokens + output_tokens)
-        
+
         # Get latencies from routing_decision
         model_latency_ms = routing_decision.get("model_latency_ms", 0.0)
         judge_latency_ms = routing_decision.get("judge_latency_ms")
+
+        # Get cost tracking fields
+        cost_source = routing_decision.get("cost_source", "unknown")
+        computed_cost = routing_decision.get("computed_cost")
 
         # Database logging (synchronous but run in thread to avoid blocking)
         await asyncio.to_thread(
@@ -361,6 +373,8 @@ class LoggingAudit:
             request_latency_ms=request_latency_ms,
             model_latency_ms=model_latency_ms,
             judge_latency_ms=judge_latency_ms,
+            cost_source=cost_source,
+            computed_cost=computed_cost,
         )
 
         # File logging (asynchronous)
@@ -429,7 +443,9 @@ class LoggingAudit:
             f"rate {escalation_rate:.2%}, threshold {threshold_before:.3f} -> {threshold_after:.3f}"
         )
 
-    async def log_budget_warning(self, session_id: str, current_cost: float, max_cost: float) -> None:
+    async def log_budget_warning(
+        self, session_id: str, current_cost: float, max_cost: float
+    ) -> None:
         """
         Log a budget warning.
         """
@@ -438,7 +454,9 @@ class LoggingAudit:
             f"current cost {current_cost:.2f}, max {max_cost:.2f}"
         )
 
-    async def log_cycle_detection(self, session_id: str, prompt_hash: str, response_hash: str) -> None:
+    async def log_cycle_detection(
+        self, session_id: str, prompt_hash: str, response_hash: str
+    ) -> None:
         """
         Log a cycle detection event.
         """
@@ -449,7 +467,7 @@ class LoggingAudit:
             prompt_hash=prompt_hash,
             response_hash=response_hash,
         )
-    
+
     async def log_escalation_trace(
         self,
         session_id: str,

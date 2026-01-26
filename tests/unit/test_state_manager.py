@@ -31,12 +31,12 @@ from sentinelrouter.schemas.config_models import (
 @pytest.fixture
 def temp_config_file():
     """Create a temporary JSON configuration file for testing."""
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         config = UnifiedConfig(
             system_settings=SystemSettings(
                 persistence_interval_seconds=1,
                 default_routing_strategy="waterfall",
-                timezone="UTC"
+                timezone="UTC",
             ),
             models={
                 "test-model-1": ModelConfig(
@@ -46,21 +46,46 @@ def temp_config_file():
                     model_definition="A test model",
                     status="ACTIVE",
                     status_valid_till=None,
-                    capabilities=ModelCapabilities(modality=["text"], context_window=128000),
+                    capabilities=ModelCapabilities(
+                        modality=["text"], context_window=128000
+                    ),
                     routing=RoutingConfig(priority_group="fast_tier", order=1),
-                    limits=RateLimits(requests_per_minute=10, requests_per_day=1000, tokens_per_minute=500000),
-                    free_tier_limits=TierLimits(requests_per_day=100, requests_per_minute=5, tokens_per_minute=100000, tokens_per_day=500000),
-                    paid_tier_limits=TierLimits(requests_per_day=5000, requests_per_minute=50, tokens_per_minute=2000000, tokens_per_day=10000000),
-                    pricing=PricingInfo(currency="USD", input_cost_per_m=0.0, output_cost_per_m=0.0, usage_tiers=[]),
-                    cost=CostInfo(per_call=0.01, per_token_input=0.000002, per_token_output=0.000004),
+                    limits=RateLimits(
+                        requests_per_minute=10,
+                        requests_per_day=1000,
+                        tokens_per_minute=500000,
+                    ),
+                    free_tier_limits=TierLimits(
+                        requests_per_day=100,
+                        requests_per_minute=5,
+                        tokens_per_minute=100000,
+                        tokens_per_day=500000,
+                    ),
+                    paid_tier_limits=TierLimits(
+                        requests_per_day=5000,
+                        requests_per_minute=50,
+                        tokens_per_minute=2000000,
+                        tokens_per_day=10000000,
+                    ),
+                    pricing=PricingInfo(
+                        currency="USD",
+                        input_cost_per_m=0.0,
+                        output_cost_per_m=0.0,
+                        usage_tiers=[],
+                    ),
+                    cost=CostInfo(
+                        per_call=0.01,
+                        per_token_input=0.000002,
+                        per_token_output=0.000004,
+                    ),
                     state=ModelState(
                         current_rpm=0,
                         requests_today=0,
                         tokens_today=0,
                         total_cost_session=0.0,
                         last_updated_ts=None,
-                        exhausted_until_ts=None
-                    )
+                        exhausted_until_ts=None,
+                    ),
                 ),
                 "test-model-2": ModelConfig(
                     display_name="Test Model 2",
@@ -69,32 +94,58 @@ def temp_config_file():
                     model_definition="Another test model",
                     status="BANNED",
                     status_valid_till=None,
-                    capabilities=ModelCapabilities(modality=["text"], context_window=128000),
+                    capabilities=ModelCapabilities(
+                        modality=["text"], context_window=128000
+                    ),
                     routing=RoutingConfig(priority_group="strong_tier", order=1),
-                    limits=RateLimits(requests_per_minute=5, requests_per_day=500, tokens_per_minute=200000),
-                    free_tier_limits=TierLimits(requests_per_day=50, requests_per_minute=2, tokens_per_minute=50000, tokens_per_day=200000),
-                    paid_tier_limits=TierLimits(requests_per_day=3000, requests_per_minute=30, tokens_per_minute=1500000, tokens_per_day=8000000),
-                    pricing=PricingInfo(currency="USD", input_cost_per_m=1.0, output_cost_per_m=2.0, usage_tiers=[]),
-                    cost=CostInfo(per_call=0.05, per_token_input=0.000005, per_token_output=0.00001),
+                    limits=RateLimits(
+                        requests_per_minute=5,
+                        requests_per_day=500,
+                        tokens_per_minute=200000,
+                    ),
+                    free_tier_limits=TierLimits(
+                        requests_per_day=50,
+                        requests_per_minute=2,
+                        tokens_per_minute=50000,
+                        tokens_per_day=200000,
+                    ),
+                    paid_tier_limits=TierLimits(
+                        requests_per_day=3000,
+                        requests_per_minute=30,
+                        tokens_per_minute=1500000,
+                        tokens_per_day=8000000,
+                    ),
+                    pricing=PricingInfo(
+                        currency="USD",
+                        input_cost_per_m=1.0,
+                        output_cost_per_m=2.0,
+                        usage_tiers=[],
+                    ),
+                    cost=CostInfo(
+                        per_call=0.05,
+                        per_token_input=0.000005,
+                        per_token_output=0.00001,
+                    ),
                     state=ModelState(
                         current_rpm=0,
                         requests_today=0,
                         tokens_today=0,
                         total_cost_session=0.0,
                         last_updated_ts=None,
-                        exhausted_until_ts=None
-                    )
-                )
+                        exhausted_until_ts=None,
+                    ),
+                ),
             },
-            judge_config=JudgeConfig(model_order=["test-model-1", "test-model-2"], is_judge_required=False),
+            judge_config=JudgeConfig(
+                model_order=["test-model-1", "test-model-2"], is_judge_required=False
+            ),
             routing_order_config=RoutingOrderConfig(
-                strong_models=["test-model-2"],
-                weak_models=["test-model-1"]
-            )
+                strong_models=["test-model-2"], weak_models=["test-model-1"]
+            ),
         )
         json.dump(config.model_dump(exclude_none=True), f, default=str)
         temp_path = Path(f.name)
-    
+
     # File is now closed and written, yield the path
     yield temp_path
     # Cleanup after test
@@ -107,17 +158,19 @@ async def state_manager(temp_config_file, monkeypatch):
     import json
     from sentinelrouter.schemas.config_models import UnifiedConfig
     from sentinelrouter.sentinelrouter.config import get_settings
-    
+
     # Patch get_settings to return settings with temp config file path
     mock_settings = get_settings()
     mock_settings.models_config_path = str(temp_config_file)
-    monkeypatch.setattr('sentinelrouter.sentinelrouter.config.get_settings', lambda: mock_settings)
-    
+    monkeypatch.setattr(
+        "sentinelrouter.sentinelrouter.config.get_settings", lambda: mock_settings
+    )
+
     # Load config directly from the temp file
-    with open(temp_config_file, 'r') as f:
+    with open(temp_config_file, "r") as f:
         data = json.load(f)
     config_obj = UnifiedConfig(**data)
-    
+
     manager = StateManager(config_obj)
     manager.start()
     yield manager
@@ -162,7 +215,7 @@ async def test_update_model_state(state_manager):
         "test-model-1",
         requests_today=42,
         total_cost_session=3.14,
-        last_updated_ts=datetime.now(timezone.utc)
+        last_updated_ts=datetime.now(timezone.utc),
     )
 
     after = await state_manager.get_model_state("test-model-1")
@@ -196,9 +249,7 @@ async def test_flush_dirty(state_manager, temp_config_file):
     """Test that dirty models are persisted to disk."""
     # Make a change
     await state_manager.update_model_state(
-        "test-model-1",
-        requests_today=99,
-        last_updated_ts=datetime.now(timezone.utc)
+        "test-model-1", requests_today=99, last_updated_ts=datetime.now(timezone.utc)
     )
     dirty_before = await state_manager.get_dirty_count()
     assert dirty_before > 0
@@ -207,7 +258,7 @@ async def test_flush_dirty(state_manager, temp_config_file):
     await state_manager.force_flush()
 
     # Verify the file was written
-    with open(temp_config_file, 'r') as f:
+    with open(temp_config_file, "r") as f:
         saved_config = json.load(f)
 
     saved_model = saved_config["models"]["test-model-1"]
@@ -222,9 +273,7 @@ async def test_background_flush(state_manager, temp_config_file):
     """Test that the background task periodically flushes dirty models."""
     # Update a model
     await state_manager.update_model_state(
-        "test-model-2",
-        requests_today=123,
-        last_updated_ts=datetime.now(timezone.utc)
+        "test-model-2", requests_today=123, last_updated_ts=datetime.now(timezone.utc)
     )
     dirty_before = await state_manager.get_dirty_count()
     assert dirty_before > 0
@@ -233,7 +282,7 @@ async def test_background_flush(state_manager, temp_config_file):
     await asyncio.sleep(1.5)
 
     # Verify the flush happened
-    with open(temp_config_file, 'r') as f:
+    with open(temp_config_file, "r") as f:
         saved_config = json.load(f)
 
     saved_model = saved_config["models"]["test-model-2"]
@@ -254,12 +303,14 @@ async def test_add_model(state_manager):
         status="ACTIVE",
         capabilities=ModelCapabilities(modality=["text"], context_window=128000),
         routing=RoutingConfig(priority_group="fast_tier", order=2),
-        limits=RateLimits(requests_per_minute=20, requests_per_day=2000, tokens_per_minute=1000000),
+        limits=RateLimits(
+            requests_per_minute=20, requests_per_day=2000, tokens_per_minute=1000000
+        ),
         free_tier_limits=TierLimits(),
         paid_tier_limits=TierLimits(),
         pricing=PricingInfo(),
         cost=CostInfo(),
-        state=ModelState()
+        state=ModelState(),
     )
     success = await state_manager.add_model("new-model", new_model)
     assert success is True
@@ -281,7 +332,7 @@ async def test_delete_model(state_manager):
 
     success = await state_manager.delete_model("test-model-1")
     assert success is True
-    
+
     # Model is still in the list but marked as BANNED (soft delete)
     all_models = await state_manager.get_all_models()
     assert "test-model-1" in all_models
@@ -346,8 +397,7 @@ async def test_judge_config(state_manager):
 
     # Update
     success = await state_manager.update_judge_config(
-        model_order=["test-model-2", "test-model-1"],
-        is_judge_required=True
+        model_order=["test-model-2", "test-model-1"], is_judge_required=True
     )
     assert success is True
     judge_config = await state_manager.get_judge_config()
@@ -365,8 +415,7 @@ async def test_routing_order_config(state_manager):
 
     # Update
     success = await state_manager.update_routing_order_config(
-        strong_models=["test-model-1"],
-        weak_models=["test-model-2"]
+        strong_models=["test-model-1"], weak_models=["test-model-2"]
     )
     assert success is True
     routing_config = await state_manager.get_routing_order_config()
@@ -398,7 +447,7 @@ async def test_force_flush(state_manager, temp_config_file):
     await state_manager.force_flush()
 
     # Read file and check
-    with open(temp_config_file, 'r') as f:
+    with open(temp_config_file, "r") as f:
         data = json.load(f)
     assert data["models"]["test-model-1"]["state"]["requests_today"] == 777
     dirty_after = await state_manager.get_dirty_count()
@@ -406,32 +455,37 @@ async def test_force_flush(state_manager, temp_config_file):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Test isolation issue - singleton state affected by other tests. Passes when run alone.")
+@pytest.mark.skip(
+    reason="Test isolation issue - singleton state affected by other tests. Passes when run alone."
+)
 async def test_singleton():
     """Test that get_state_manager returns a singleton instance."""
     import tempfile
     import sentinelrouter.sentinelrouter.state_manager as sm_module
-    
+
     # Reset the global singleton before test
     if sm_module._state_manager is not None:
         await sm_module._state_manager.stop()
         sm_module._state_manager = None
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         config = UnifiedConfig().model_dump()
         json.dump(config, f)
         f.flush()
         temp_path = f.name
-    
+
     try:
         from sentinelrouter.sentinelrouter.config import get_settings
         import unittest.mock as mock
-        
+
         # Mock get_settings to return a settings object with our temp path
         mock_settings = get_settings()
         mock_settings.models_config_path = temp_path
-        
-        with mock.patch('sentinelrouter.sentinelrouter.config.get_settings', return_value=mock_settings):
+
+        with mock.patch(
+            "sentinelrouter.sentinelrouter.config.get_settings",
+            return_value=mock_settings,
+        ):
             manager1 = await get_state_manager()
             manager2 = await get_state_manager()
             assert manager1 is manager2
@@ -440,5 +494,6 @@ async def test_singleton():
             sm_module._state_manager = None
     finally:
         import os
+
         if os.path.exists(temp_path):
             os.remove(temp_path)

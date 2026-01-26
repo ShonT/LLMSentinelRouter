@@ -40,11 +40,14 @@ services:
       - sentinelrouter_data:/home/sentinel/app/data
       - sentinelrouter_logs:/home/sentinel/app/logs
     restart: unless-stopped
-    # Resource limits as per design (1 CPU, 512MB RAM)
+    # Resource limits (increased for VECTORDB_LOCAL with transformers + onnxruntime)
     deploy:
       resources:
         limits:
-          cpus: '1.0'
+          cpus: '2.0'        # Increased for ONNX inference (CPU-intensive)
+          memory: 2G         # Increased for model loading + runtime (~1.5-2GB needed)
+        reservations:
+          cpus: '0.5'
           memory: 512M
     # Health check (using httpx which is in dependencies)
     healthcheck:

@@ -1,0 +1,153 @@
+{
+  "_comment": "Demo SentinelRouter configuration with new Pydantic schema",
+  "_comment2": "This demonstrates proper key management, model definitions, and routing policy",
+  
+  "keys": {
+    "groq_key_1": {
+      "type": "groq",
+      "value": "${GROQ_API_KEY}"
+    },
+    "groq_key_2": {
+      "type": "groq",
+      "value": "${GROQ_API_KEY_BACKUP}"
+    },
+    "deepseek_key_1": {
+      "type": "deepseek",
+      "value": "${DEEPSEEK_API_KEY}"
+    },
+    "deepseek_key_2": {
+      "type": "deepseek",
+      "value": "${DEEPSEEK_API_KEY_BACKUP}"
+    },
+    "anthropic_key_1": {
+      "type": "anthropic",
+      "value": "${ANTHROPIC_API_KEY}"
+    },
+    "gemini_key_1": {
+      "type": "gemini",
+      "value": "${GEMINI_API_KEY}"
+    }
+  },
+  
+  "key_instances": {
+    "groq_primary": {
+      "key_ref": "groq_key_1",
+      "priority": 0,
+      "description": "Primary Groq API key for fast inference"
+    },
+    "groq_backup": {
+      "key_ref": "groq_key_2",
+      "priority": 1,
+      "description": "Backup Groq API key for failover"
+    },
+    "deepseek_primary": {
+      "key_ref": "deepseek_key_1",
+      "priority": 0,
+      "description": "Primary DeepSeek API key"
+    },
+    "deepseek_backup": {
+      "key_ref": "deepseek_key_2",
+      "priority": 1,
+      "description": "Backup DeepSeek API key"
+    },
+    "anthropic_primary": {
+      "key_ref": "anthropic_key_1",
+      "priority": 0,
+      "description": "Primary Anthropic API key for Claude models"
+    },
+    "gemini_backup": {
+      "key_ref": "gemini_key_1",
+      "priority": 0,
+      "description": "Gemini backup for judge system"
+    }
+  },
+  
+  "models": {
+    "groq-llama-3.1-8b": {
+      "enabled": true,
+      "provider": "groq",
+      "model_id": "llama-3.1-8b-instant",
+      "key_instances": ["groq_primary", "groq_backup"],
+      "display_name": "Llama 3.1 8B Instant (Groq)",
+      "pricing": {
+        "input_cost_per_m": 0.05,
+        "output_cost_per_m": 0.08
+      },
+      "limits": {
+        "requests_per_minute": 30,
+        "requests_per_day": 14400,
+        "tokens_per_minute": 30000
+      }
+    },
+    "deepseek-chat": {
+      "enabled": true,
+      "provider": "deepseek",
+      "model_id": "deepseek-chat",
+      "key_instances": ["deepseek_primary", "deepseek_backup"],
+      "display_name": "DeepSeek Chat",
+      "pricing": {
+        "input_cost_per_m": 0.14,
+        "output_cost_per_m": 0.28
+      },
+      "limits": {
+        "requests_per_minute": 60,
+        "requests_per_day": 10000,
+        "tokens_per_minute": 1000000
+      }
+    },
+    "claude-3-opus": {
+      "enabled": true,
+      "provider": "anthropic",
+      "model_id": "claude-3-opus-20240229",
+      "key_instance": "anthropic_primary",
+      "display_name": "Claude 3 Opus",
+      "pricing": {
+        "input_cost_per_m": 15.0,
+        "output_cost_per_m": 75.0
+      },
+      "limits": {
+        "requests_per_minute": 50,
+        "requests_per_day": 10000,
+        "tokens_per_minute": 80000
+      }
+    },
+    "gemini-flash": {
+      "enabled": true,
+      "provider": "gemini",
+      "model_id": "gemini-1.5-flash-002",
+      "key_instance": "gemini_backup",
+      "display_name": "Gemini 1.5 Flash",
+      "pricing": {
+        "input_cost_per_m": 0.075,
+        "output_cost_per_m": 0.30
+      },
+      "limits": {
+        "requests_per_minute": 15,
+        "requests_per_day": 1500,
+        "tokens_per_minute": 1000000
+      }
+    }
+  },
+  
+  "routing_policy": {
+    "weak_tier": {
+      "order": ["groq-llama-3.1-8b", "deepseek-chat"]
+    },
+    "strong_tier": {
+      "order": ["claude-3-opus"]
+    }
+  },
+  
+  "judge": {
+    "enabled": true,
+    "model_order": ["gemini-flash", "deepseek-chat"],
+    "complexity_threshold": 0.5
+  },
+  
+  "semantic_cache": {
+    "enabled": true,
+    "min_samples": 3,
+    "confidence_threshold": 0.75,
+    "ttl_seconds": 604800
+  }
+}

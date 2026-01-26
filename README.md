@@ -12,7 +12,9 @@ SentinelRouter is a Python‑based local API gateway that sits between an autono
 - **Module A – Budget Kill‑Switch:** Tracks cumulative cost per session and rejects requests when `MAX_COST_PER_SESSION` is exceeded.
 - **Module B – "Stingy" Judge & Categorizer:** Uses a weak model (DeepSeek) to analyze prompt complexity and recommend a route (weak/strong).
 - **Module C – Dynamic Thresholding (5% Rule):** Adjusts routing strictness based on the escalation rate (percentage of requests escalated to the strong model). If the rate exceeds 5%, the threshold is raised (making the router "stingier").
-- **Module D – Graph‑Based Cycle Detection:** Uses `networkx` to build a directed graph of request‑response semantic hashes and blocks repetitive cycles.
+- **Module D – Graph‑Based Cycle Detection:** Uses `networkx` to build a directed graph of request‑response semantic hashes and blocks repetitive cycles. Supports three-tiered semantic strategies: SimHash (ultra-fast), Local Vectors (balanced), and API Vectors (highest precision).
+- **Semantic Similarity Strategies:** Pluggable three-tier system (SimHash/VECTORDB_LOCAL/VECTORDB_API) for detecting duplicate and paraphrased prompts with memory footprints from 5MB to 80MB.
+- **Async I/O Architecture:** Built on `httpx.AsyncClient` with connection pooling (100 max connections, 20 keepalive) for high-throughput concurrent request handling without thread pool exhaustion.
 - **OpenAI‑Compatible API:** Serves a standard `/v1/chat/completions` endpoint with added headers for monitoring.
 - **Structured JSON Logging & Audit Trail:** Every routing decision is logged to both the console and a JSON file, and stored in a SQLite database for post‑incident analysis.
 - **Docker Container:** Production‑ready multi‑stage build based on `python:3.11‑slim`, with non‑root user, resource limits (1 CPU, 512 MB RAM), health checks, and persistent storage.
@@ -167,6 +169,52 @@ All configuration is done via environment variables. The most important ones are
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | INFO |
 
 See [.env.example](.env.example) for a complete list.
+
+## CI/CD
+
+SentinelRouter uses GitHub Actions for PR validation, release builds, and manual staging deployments.
+
+### Workflows
+
+- **PR validation** (`.github/workflows/pr-validation.yml`): Runs on all pull requests. It checks formatting (Black), type checking (mypy with relaxed settings), unit tests, and integration tests (only when required secrets are present).
+- **Release build** (`.github/workflows/release.yml`): Runs on pushes to `main` and tag pushes. Builds a Docker image to verify the release is buildable.
+- **Staging deploy** (`.github/workflows/deploy-staging.yml`): Manual workflow for staging deployments.
+
+### Required GitHub Secrets
+
+Add the following repository secrets in **Settings -> Secrets and variables -> Actions**:
+
+**Required for PR validation:**
+- `DEEPSEEK_API_KEY` - DeepSeek API key for weak model
+- `ANTHROPIC_API_KEY` - Anthropic API key for strong model (Claude)
+- `GEMINI_BACKUP1_API_KEY` - Google Gemini API key for judge backup
+- `GEMINI_BACKUP2_API_KEY` - Google Gemini API key for judge backup
+- `GROQ_API_KEY` - Groq API key for alternative models
+- `OPENROUTER_API_KEY` - OpenRouter API key for free-tier models
+
+**Optional for advanced features:**
+- `OPENAI_API_KEY` or `SEMANTIC_API_KEY` - Only needed if using `VECTORDB_API` semantic strategy for cycle detection
+
+**Optional for staging deployment:**
+- `STAGING_HOST` - Staging server hostname
+- `STAGING_USER` - Staging server SSH user
+- `STAGING_SSH_PRIVATE_KEY` - SSH private key for staging deployment
+
+**Optional for Docker registry:**
+- `DOCKER_REGISTRY` - Registry URL (e.g., `ghcr.io`)
+- `DOCKER_REGISTRY_USERNAME` - Registry username
+- `DOCKER_REGISTRY_PASSWORD` - Registry password or token
+
+Integration tests in PR validation require the API keys listed above. If secrets are missing (common in forks), the integration test step is skipped. To enforce integration tests, configure the secrets in the target repository.
+
+### Branch Protection
+
+To require CI to pass before merging:
+
+1. Go to **Settings -> Branches**.
+2. Add a protection rule for `main`.
+3. Enable **Require status checks to pass before merging**.
+4. Select the **PR Validation / validate** check as a required status check.
 
 ## Supported Providers
 

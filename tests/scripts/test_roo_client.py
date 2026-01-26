@@ -8,10 +8,11 @@ import json
 BASE_URL = "http://localhost:8000/v1"
 SESSION_ID = "roo-test-client"
 
+
 def test_connection():
     """Test basic connection to SentinelRouter."""
     client = httpx.Client(base_url=BASE_URL, timeout=60.0)
-    
+
     # Test 1: List models (like OpenAI SDK does)
     print("🔍 Test 1: Listing models...")
     try:
@@ -23,7 +24,7 @@ def test_connection():
             print(f"   ❌ Error: {response.text}")
     except Exception as e:
         print(f"   ❌ Exception: {e}")
-    
+
     # Test 2: Send chat completion
     print("\n🔍 Test 2: Chat completion...")
     try:
@@ -34,8 +35,8 @@ def test_connection():
                 "model": "gpt-4",
                 "messages": [
                     {"role": "user", "content": "Say 'test successful' in 3 words"}
-                ]
-            }
+                ],
+            },
         )
         print(f"   Status: {response.status_code}")
         if response.status_code == 200:
@@ -48,7 +49,7 @@ def test_connection():
             print(f"   ❌ Error: {response.text}")
     except Exception as e:
         print(f"   ❌ Exception: {e}")
-    
+
     # Test 3: Check session
     print("\n🔍 Test 3: Session status...")
     try:
@@ -62,9 +63,10 @@ def test_connection():
             print(f"   ❌ Error: {response.text}")
     except Exception as e:
         print(f"   ❌ Exception: {e}")
-    
+
     client.close()
     print("\n✅ Test complete!")
+
 
 if __name__ == "__main__":
     test_connection()
