@@ -32,7 +32,7 @@ jobs:
 
       - name: Type check (mypy)
         run: |
-          mypy --ignore-missing-imports sentinelrouter || true
+          mypy --ignore-missing-imports sentinelrouter
 
       - name: Unit tests
         run: |

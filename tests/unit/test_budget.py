@@ -34,21 +34,21 @@ def budget_manager(test_db):
 class TestBudgetKillSwitch:
     """Tests for Module A - Budget Kill-Switch."""
 
-    # def test_get_or_create_session_new(self, budget_manager, test_db):
-    #     """Test creating a new session."""
-    #     session = budget_manager.get_or_create_session("test_session_1")
+    def test_get_or_create_session_new(self, budget_manager, test_db):
+        """Test creating a new session."""
+        session = budget_manager.get_or_create_session("test_session_1")
 
-    #     assert session.session_id == "test_session_1"
-    #     assert session.current_cost == 0.0
-    #     assert session.max_cost_per_session == 10.0  # Default from config
-    #     assert session.is_active is True
+        assert session.session_id == "test_session_1"
+        assert session.current_cost == 0.0
+        assert session.max_cost_per_session == 10.0  # Default from config
+        assert session.is_active is True
 
-    #     # Verify it's persisted in database
-    #     db_session = (
-    #         test_db.query(SessionModel).filter_by(session_id="test_session_1").first()
-    #     )
-    #     assert db_session is not None
-    #     assert db_session.session_id == "test_session_1"
+        # Verify it's persisted in database
+        db_session = (
+            test_db.query(SessionModel).filter_by(session_id="test_session_1").first()
+        )
+        assert db_session is not None
+        assert db_session.session_id == "test_session_1"
 
     def test_get_or_create_session_existing(self, budget_manager, test_db):
         """Test retrieving an existing session."""

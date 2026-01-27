@@ -2,8 +2,6 @@ import json
 import threading
 from types import SimpleNamespace
 
-import pytest
-
 from sentinelrouter.sentinelrouter import config as config_module
 from sentinelrouter.sentinelrouter import config_manager as config_manager_module
 from sentinelrouter.sentinelrouter.config_manager import ConfigManager, atomic_write_json

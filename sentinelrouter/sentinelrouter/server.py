@@ -5,6 +5,7 @@ FastAPI application for SentinelRouter.
 import logging
 import uuid
 import time
+import hashlib
 from typing import Optional, List, Dict, Any, Tuple
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
@@ -15,19 +16,22 @@ import uvicorn
 
 from .database import get_db, init_db
 from .router_logic import Router, route_request
-from .logging_audit import setup_logging, log_structured
-from .config import get_settings, get_runtime_config_with_meta
+from .logging_audit import log_structured
+from .config import get_settings, get_runtime_config_with_meta, get_runtime_config
 from .config_manager import (
     get_config_manager,
     atomic_write_json,
     ensure_sentinel_config_file,
     validate_key_value,
     mask_key_value,
+    is_env_placeholder,
 )
+from .clients import validate_provider_key
 from .budget import BudgetKillSwitch
 from .models import Session as SessionModel, RoutingDecision
 from .state_manager import get_state_manager
 from ..schemas.sentinel_config import SentinelConfig, ProviderType
+from .rate_limiter import get_rate_limiter
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -187,6 +191,17 @@ class KeysUpdateRequest(BaseModel):
     keys: Dict[str, KeyUpdate] = Field(..., description="Keys to update or create")
 
 
+class KeyTestRequest(BaseModel):
+    key_id: Optional[str] = Field(
+        None, description="Key ID to validate (optional if provider supplied)"
+    )
+    value: str = Field(..., description="API key value to validate")
+    provider: Optional[str] = Field(None, description="Provider type override")
+    timeout_seconds: Optional[float] = Field(
+        None, ge=1.0, le=30.0, description="Optional timeout override"
+    )
+
+
 def _extract_admin_token(request: Request) -> Optional[str]:
     header_token = request.headers.get("X-Admin-Token")
     if header_token:
@@ -197,7 +212,7 @@ def _extract_admin_token(request: Request) -> Optional[str]:
     return None
 
 
-def _require_admin_access(request: Request) -> None:
+def _require_admin_access(request: Request) -> str:
     settings = get_settings()
     if not settings.admin_api_token:
         raise HTTPException(
@@ -207,6 +222,7 @@ def _require_admin_access(request: Request) -> None:
     token = _extract_admin_token(request)
     if not token or token != settings.admin_api_token:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    return token
 
 
 def _normalize_provider(value: Optional[str]) -> Optional[ProviderType]:
@@ -225,6 +241,36 @@ def _mask_keys_for_response(keys: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
     return masked
 
 
+
+
+def _resolve_provider_for_test(
+    key_id: Optional[str], provider: Optional[str]
+) -> ProviderType:
+    if provider:
+        try:
+            return _normalize_provider(provider)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid provider type") from exc
+    if key_id:
+        runtime_config = get_runtime_config()
+        key_entry = runtime_config.keys.get(key_id)
+        if key_entry:
+            return key_entry.type
+    raise HTTPException(
+        status_code=400,
+        detail="Provider type required for key validation.",
+    )
+
+
+def _admin_test_rate_tag(request: Request) -> str:
+    token = _extract_admin_token(request)
+    if token:
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+        return f"admin_key_test:token:{token_hash}"
+    client_ip = getattr(request.client, "host", "unknown")
+    return f"admin_key_test:ip:{client_ip}"
+
+
 # ============================================================================
 # Exception Handlers
 # ============================================================================
@@ -235,8 +281,17 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """Log validation errors with full request details."""
     body = await request.body()
     logger.error(f"Validation error on {request.url.path}")
-    logger.error(f"Request body: {body.decode('utf-8', errors='ignore')}")
+    if request.url.path in ("/admin/config/keys", "/admin/config/test-key"):
+        logger.error("Request body: <redacted>")
+    else:
+        logger.error(f"Request body: {body.decode('utf-8', errors='ignore')}")
     logger.error(f"Validation errors: {exc.errors()}")
+
+    if request.url.path == "/admin/config/test-key":
+        return JSONResponse(
+            status_code=422,
+            content={"valid": False, "message": "Invalid request payload."},
+        )
 
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
@@ -776,6 +831,75 @@ async def replace_admin_keys(payload: KeysUpdateRequest, request: Request):
 async def patch_admin_keys(payload: KeysUpdateRequest, request: Request):
     """Patch API keys in the sentinel config."""
     return await _handle_keys_update(request, payload)
+
+
+@app.post("/admin/config/test-key")
+async def test_admin_key(payload: KeyTestRequest, request: Request):
+    """Validate an API key with a provider-specific minimal call."""
+    try:
+        _require_admin_access(request)
+    except HTTPException as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"valid": False, "message": exc.detail},
+        )
+
+    try:
+        cleaned_value = validate_key_value(payload.value)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"valid": False, "message": str(exc)})
+
+    if is_env_placeholder(cleaned_value):
+        return JSONResponse(
+            content={
+                "valid": False,
+                "message": "Cannot validate env placeholder keys. Resolve the value and try again.",
+            }
+        )
+
+    try:
+        provider = _resolve_provider_for_test(payload.key_id, payload.provider)
+    except HTTPException as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"valid": False, "message": exc.detail},
+        )
+
+    rate_limiter = get_rate_limiter()
+    rate_tag = _admin_test_rate_tag(request)
+    allowed, reason, _ = await rate_limiter.check_rate_limits(
+        model_id=rate_tag, rpm_limit=30, rpd_limit=300
+    )
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "valid": False,
+                "message": f"Rate limit exceeded: {reason}",
+            },
+        )
+
+    timeout = payload.timeout_seconds or 10.0
+    try:
+        valid, message = await validate_provider_key(provider, cleaned_value, timeout)
+    except Exception as exc:  # pragma: no cover - unexpected validation failure
+        logger.warning(
+            "Key validation failed for provider %s: %s",
+            provider.value if hasattr(provider, "value") else provider,
+            exc,
+        )
+        valid, message = False, "Validation failed due to provider error."
+    finally:
+        await rate_limiter.record_request(rate_tag, tokens=0)
+
+    logger.info(
+        "Admin key test result: provider=%s, key_id=%s, valid=%s",
+        provider.value if hasattr(provider, "value") else provider,
+        payload.key_id or "unknown",
+        valid,
+    )
+
+    return JSONResponse(content={"valid": valid, "message": message})
 
 
 # ============================================================================

@@ -8,9 +8,8 @@ Provides:
 """
 
 try:
-    from fastapi import FastAPI, Request, HTTPException, Depends
+    from fastapi import FastAPI, HTTPException, Depends
     from fastapi.responses import HTMLResponse, JSONResponse
-    from fastapi.staticfiles import StaticFiles
 except ModuleNotFoundError:  # pragma: no cover - allow unit tests without FastAPI
     FastAPI = None
     Request = object
@@ -62,17 +61,14 @@ import json
 
 from .metrics import get_metrics_collector
 from .state_manager import get_state_manager
-from .config import get_unified_config, get_settings, get_runtime_config
+from .config import get_unified_config, get_runtime_config
 from .throttle_manager import get_throttle_manager
 
 try:
-    from .router_logic import Router
     from .database import get_db
     from .models import RoutingDecision
     from sqlalchemy.orm import Session
 except ModuleNotFoundError:  # pragma: no cover - allow unit tests without db deps
-    Router = None
-
     def get_db():
         raise RuntimeError("Database dependencies are not installed")
 
@@ -306,6 +302,7 @@ async def dashboard_home():
                 background: white;
                 border-radius: 8px;
                 border: 1px solid #e2e8f0;
+                flex-wrap: wrap;
             }
             .api-keys-toolbar {
                 display: flex;
@@ -416,6 +413,52 @@ async def dashboard_home():
                 font-size: 0.85rem;
             }
             .btn-reveal:hover { background: #64748b; }
+            .btn-test-key {
+                background: #0ea5e9;
+                color: white;
+                border: none;
+                padding: 8px 14px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 0.85rem;
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .btn-test-key:hover { background: #0284c7; }
+            .btn-test-key:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+            }
+            .btn-test-key.is-loading .key-test-spinner {
+                display: inline-block;
+            }
+            .key-test-spinner {
+                display: none;
+                width: 12px;
+                height: 12px;
+                border: 2px solid rgba(255, 255, 255, 0.4);
+                border-top-color: #ffffff;
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+            }
+            .key-test-status {
+                font-size: 0.85rem;
+                font-weight: 600;
+                min-width: 140px;
+            }
+            .key-test-status.key-test-loading {
+                color: #0284c7;
+            }
+            .key-test-status.key-test-success {
+                color: #16a34a;
+            }
+            .key-test-status.key-test-error {
+                color: #dc2626;
+            }
+            @keyframes spin {
+                to { transform: rotate(360deg); }
+            }
             .sortable-list {
                 list-style: none;
                 padding: 0;
@@ -905,7 +948,7 @@ async def dashboard_home():
             let apiKeysCache = {};
             let apiKeysDraft = {};
             let apiKeysDirty = false;
-
+            let apiKeyTypes = {};
             // Tab switching
             document.querySelectorAll('.tab').forEach(tab => {
                 tab.addEventListener('click', () => {
@@ -1243,6 +1286,7 @@ async def dashboard_home():
                 try {
                     const response = await fetch('/api/dashboard/configuration');
                     const data = await response.json();
+                    apiKeyTypes = data.api_key_types || {};
                     renderApiKeys(data.api_keys);
                     renderPriorityList(data.models);
                     renderRateLimits(data.models);
@@ -1265,12 +1309,18 @@ async def dashboard_home():
                 apiKeysDirty = false;
                 const rows = Object.entries(apiKeysCache).map(([key, value]) => {
                     if (liveEditEnabled) {
+                        const provider = apiKeyTypes[key] || '';
                         return `
                             <div class="api-key-row">
                                 <span class="api-key-label">${key}</span>
                                 <input class="api-key-input" type="password" data-key-id="${key}"
                                     value="${escapeAttribute(value)}" oninput="handleKeyInput(this)">
                                 <button class="btn-reveal" onclick="toggleKeyVisibility(this)">Show</button>
+                                <button class="btn-test-key" data-key-id="${key}" data-provider="${provider}" onclick="testKey(this)">
+                                    <span class="btn-label">Test</span>
+                                    <span class="key-test-spinner" aria-hidden="true"></span>
+                                </button>
+                                <span class="key-test-status" data-key-id="${key}" aria-live="polite"></span>
                             </div>
                         `;
                     }
@@ -1309,6 +1359,80 @@ async def dashboard_home():
                 } else {
                     input.type = 'password';
                     button.textContent = 'Show';
+                }
+            }
+
+            function setKeyTestState(keyId, state, message) {
+                const statusEl = document.querySelector(`.key-test-status[data-key-id="${keyId}"]`);
+                const button = document.querySelector(`.btn-test-key[data-key-id="${keyId}"]`);
+                if (button) {
+                    button.disabled = state === 'loading';
+                    button.classList.toggle('is-loading', state === 'loading');
+                }
+                if (!statusEl) return;
+                statusEl.className = 'key-test-status';
+                if (state === 'loading') {
+                    statusEl.classList.add('key-test-loading');
+                    statusEl.textContent = 'Testing...';
+                    return;
+                }
+                if (state === 'success') {
+                    statusEl.classList.add('key-test-success');
+                    statusEl.textContent = `✓ ${message || 'Key valid'}`;
+                    return;
+                }
+                if (state === 'error') {
+                    statusEl.classList.add('key-test-error');
+                    statusEl.textContent = `✕ ${message || 'Key invalid'}`;
+                    return;
+                }
+                statusEl.textContent = '';
+            }
+
+            async function testKey(button) {
+                const keyId = button.getAttribute('data-key-id');
+                const provider = button.getAttribute('data-provider') || apiKeyTypes[keyId] || '';
+                const row = button.closest('.api-key-row');
+                const input = row ? row.querySelector('.api-key-input') : null;
+                const keyValue = input ? input.value : (apiKeysDraft[keyId] || '');
+                if (!keyId) return;
+                if (!provider) {
+                    setKeyTestState(keyId, 'error', 'Provider missing');
+                    return;
+                }
+                if (!keyValue) {
+                    setKeyTestState(keyId, 'error', 'Key is empty');
+                    return;
+                }
+                const token = getAdminToken();
+                if (!token) {
+                    setKeyTestState(keyId, 'error', 'Admin token required');
+                    return;
+                }
+                setKeyTestState(keyId, 'loading');
+
+                try {
+                    const response = await fetch('/admin/config/test-key', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Admin-Token': token
+                        },
+                        body: JSON.stringify({ key_id: keyId, provider, value: keyValue })
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        const message = payload?.message || payload?.detail || 'Validation failed';
+                        setKeyTestState(keyId, 'error', message);
+                        return;
+                    }
+                    if (payload.valid) {
+                        setKeyTestState(keyId, 'success', payload.message || 'Key valid');
+                    } else {
+                        setKeyTestState(keyId, 'error', payload.message || 'Key invalid');
+                    }
+                } catch (error) {
+                    setKeyTestState(keyId, 'error', 'Network error');
                 }
             }
 
@@ -1939,12 +2063,16 @@ async def get_configuration():
     config = get_unified_config()
     runtime_config = get_runtime_config()
     api_keys = {key_id: key.value for key_id, key in runtime_config.keys.items()}
+    api_key_types = {
+        key_id: key.type.value for key_id, key in runtime_config.keys.items()
+    }
     models = []
     for model_id, model_config in config.models.items():
         models.append({"id": model_id, "config": model_config.model_dump(mode="json")})
     return JSONResponse(
         {
             "api_keys": api_keys,
+            "api_key_types": api_key_types,
             "models": models,
             "system_settings": config.system_settings.model_dump(mode="json"),
         }

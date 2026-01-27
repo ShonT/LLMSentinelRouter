@@ -100,6 +100,7 @@ def atomic_write_json(path: str, data: Dict[str, Any]) -> None:
             try:
                 os.remove(temp_path)
             except OSError:
+                # Best-effort cleanup: ignore errors when removing the temp file.
                 pass
 
 
