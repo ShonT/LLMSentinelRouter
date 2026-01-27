@@ -5,7 +5,7 @@ FastAPI application for SentinelRouter.
 import logging
 import uuid
 import time
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,11 +15,19 @@ import uvicorn
 
 from .database import get_db, init_db
 from .router_logic import Router, route_request
-from .logging_audit import setup_logging
-from .config import get_settings
+from .logging_audit import setup_logging, log_structured
+from .config import get_settings, get_runtime_config_with_meta
+from .config_manager import (
+    get_config_manager,
+    atomic_write_json,
+    ensure_sentinel_config_file,
+    validate_key_value,
+    mask_key_value,
+)
 from .budget import BudgetKillSwitch
 from .models import Session as SessionModel, RoutingDecision
 from .state_manager import get_state_manager
+from ..schemas.sentinel_config import SentinelConfig, ProviderType
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -164,6 +172,60 @@ class ErrorResponse(BaseModel):
 
 
 # ============================================================================
+# Admin Key Management Models
+# ============================================================================
+
+
+class KeyUpdate(BaseModel):
+    value: str = Field(..., description="API key value")
+    type: Optional[str] = Field(
+        None, description="Provider type (required for new keys)"
+    )
+
+
+class KeysUpdateRequest(BaseModel):
+    keys: Dict[str, KeyUpdate] = Field(..., description="Keys to update or create")
+
+
+def _extract_admin_token(request: Request) -> Optional[str]:
+    header_token = request.headers.get("X-Admin-Token")
+    if header_token:
+        return header_token
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header.split(" ", 1)[1].strip()
+    return None
+
+
+def _require_admin_access(request: Request) -> None:
+    settings = get_settings()
+    if not settings.admin_api_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin API token not configured (set ADMIN_API_TOKEN)",
+        )
+    token = _extract_admin_token(request)
+    if not token or token != settings.admin_api_token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _normalize_provider(value: Optional[str]) -> Optional[ProviderType]:
+    if value is None:
+        return None
+    if isinstance(value, ProviderType):
+        return value
+    return ProviderType(str(value).lower())
+
+
+def _mask_keys_for_response(keys: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
+    masked = {}
+    for key_id, key_data in keys.items():
+        value = key_data.get("value", "")
+        masked[key_id] = mask_key_value(value)
+    return masked
+
+
+# ============================================================================
 # Exception Handlers
 # ============================================================================
 
@@ -198,6 +260,11 @@ async def startup_event():
     rate_limiter.start()
     logger.info("Rate limiter started.")
 
+    # Start configuration manager to watch key storage changes
+    config_manager = get_config_manager()
+    config_manager.start()
+    logger.info("Configuration manager started.")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -209,6 +276,10 @@ async def shutdown_event():
     rate_limiter = get_rate_limiter()
     await rate_limiter.stop()
     logger.info("Rate limiter stopped.")
+
+    config_manager = get_config_manager()
+    config_manager.stop()
+    logger.info("Configuration manager stopped.")
 
     await close_clients()
     logger.info("Server shut down.")
@@ -579,6 +650,132 @@ async def regenerate_session_id():
         return JSONResponse(
             status_code=500, content={"success": False, "error": str(e)}
         )
+
+
+# ============================================================================
+# Admin Key Management API
+# ============================================================================
+
+
+def _apply_key_updates(
+    raw_config: Dict[str, Any], updates: Dict[str, KeyUpdate]
+) -> Tuple[Dict[str, Any], List[str]]:
+    if "keys" not in raw_config or not isinstance(raw_config["keys"], dict):
+        raw_config["keys"] = {}
+    updated_ids: List[str] = []
+
+    for key_id, update in updates.items():
+        try:
+            cleaned_value = validate_key_value(update.value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if key_id in raw_config["keys"]:
+            existing_type = raw_config["keys"][key_id].get("type")
+            if update.type:
+                try:
+                    normalized = _normalize_provider(update.type)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid provider type for key '{key_id}'",
+                    ) from exc
+                if normalized.value != existing_type:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Key '{key_id}' type mismatch ({existing_type} != {normalized.value})",
+                    )
+            raw_config["keys"][key_id]["value"] = cleaned_value
+        else:
+            if not update.type:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Key '{key_id}' requires provider type for creation",
+                )
+            try:
+                normalized = _normalize_provider(update.type)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid provider type for key '{key_id}'",
+                ) from exc
+            raw_config["keys"][key_id] = {
+                "type": normalized.value,
+                "value": cleaned_value,
+            }
+        updated_ids.append(key_id)
+
+    return raw_config, updated_ids
+
+
+def _persist_keys_update(raw_config: Dict[str, Any], sentinel_path: str) -> None:
+    try:
+        SentinelConfig(**raw_config)
+    except Exception as exc:  # pragma: no cover - validated via tests
+        raise HTTPException(
+            status_code=400, detail=f"Invalid config after update: {exc}"
+        ) from exc
+    atomic_write_json(sentinel_path, raw_config)
+
+
+async def _handle_keys_update(request: Request, payload: KeysUpdateRequest):
+    _require_admin_access(request)
+    settings = get_settings()
+    sentinel_path = settings.sentinel_config_path
+
+    raw_config = ensure_sentinel_config_file(sentinel_path)
+    raw_config, updated_ids = _apply_key_updates(raw_config, payload.keys)
+    _persist_keys_update(raw_config, sentinel_path)
+
+    # Reload runtime config for immediate effect (avoid mtime resolution issues)
+    try:
+        get_config_manager().force_reload()
+    except Exception as exc:  # pragma: no cover - best effort fallback
+        logger.warning("Config reload after key update failed: %s", exc)
+        get_runtime_config_with_meta(reload_if_changed=True)
+
+    masked_keys = _mask_keys_for_response(raw_config["keys"])
+    masked_updates = {key_id: masked_keys.get(key_id, "****") for key_id in updated_ids}
+
+    logger.info(
+        "Admin keys updated: %s",
+        {key_id: masked_updates[key_id] for key_id in updated_ids},
+    )
+    log_structured(
+        "info",
+        "Admin config keys updated",
+        extra={
+            "extra": {
+                "event": "admin_config_keys_updated",
+                "updated_keys": updated_ids,
+                "masked_updates": masked_updates,
+                "client_ip": getattr(request.client, "host", None),
+                "method": request.method,
+                "config_path": sentinel_path,
+            }
+        },
+    )
+
+    return JSONResponse(
+        content={
+            "success": True,
+            "message": "Keys updated successfully",
+            "updated_keys": updated_ids,
+            "masked_updates": masked_updates,
+        }
+    )
+
+
+@app.put("/admin/config/keys")
+async def replace_admin_keys(payload: KeysUpdateRequest, request: Request):
+    """Replace or update API keys in the sentinel config."""
+    return await _handle_keys_update(request, payload)
+
+
+@app.patch("/admin/config/keys")
+async def patch_admin_keys(payload: KeysUpdateRequest, request: Request):
+    """Patch API keys in the sentinel config."""
+    return await _handle_keys_update(request, payload)
 
 
 # ============================================================================

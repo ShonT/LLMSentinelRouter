@@ -7,8 +7,23 @@ import os
 import json
 import re
 from typing import Optional, Tuple
-from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic import Field, BaseModel
+try:
+    from pydantic_settings import BaseSettings
+except ModuleNotFoundError:  # pragma: no cover - fallback for minimal test envs
+    class BaseSettings(BaseModel):
+        """Fallback settings loader using env values from Field metadata."""
+
+        def __init__(self, **data):
+            cls = self.__class__
+            for name, field in cls.model_fields.items():
+                if name in data:
+                    continue
+                extra = field.json_schema_extra or {}
+                env_name = extra.get("env")
+                if env_name and env_name in os.environ:
+                    data[name] = os.environ[env_name]
+            super().__init__(**data)
 
 from ..schemas.config_models import (
     UnifiedConfig,
@@ -89,6 +104,9 @@ class Settings(BaseSettings):
     cors_origins: str = Field(
         "*", env="CORS_ORIGINS"
     )  # Comma-separated list, or "*" for all
+
+    # Admin access
+    admin_api_token: str = Field("", env="ADMIN_API_TOKEN")
 
     # Logging & Audit
     log_dir: str = Field("logs", env="LOG_DIR")
