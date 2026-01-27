@@ -21,11 +21,11 @@ fi
 case "$1" in
     --unit)
         echo "Running unit tests only..."
-        python3 -m pytest tests/test_budget.py tests/test_judge.py tests/test_threshold.py tests/test_cycle_detector.py tests/test_clients.py -v
+        python3 -m pytest tests/unit/ -v
         ;;
     --integration)
         echo "Running integration tests..."
-        python3 -m pytest tests/test_integration.py tests/test_router.py tests/test_server.py -v
+        python3 -m pytest tests/test_integration.py tests/test_openrouter_client.py tests/test_groq_client.py tests/test_rate_limiter.py tests/api/test_server.py -v
         ;;
     --fast)
         echo "Running quick test suite (no output)..."

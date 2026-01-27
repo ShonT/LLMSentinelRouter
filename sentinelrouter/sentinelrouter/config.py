@@ -7,8 +7,23 @@ import os
 import json
 import re
 from typing import Optional, Tuple
-from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic import Field, BaseModel
+try:
+    from pydantic_settings import BaseSettings
+except ModuleNotFoundError:  # pragma: no cover - fallback for minimal test envs
+    class BaseSettings(BaseModel):
+        """Fallback settings loader using env values from Field metadata."""
+
+        def __init__(self, **data):
+            cls = self.__class__
+            for name, field in cls.model_fields.items():
+                if name in data:
+                    continue
+                extra = field.json_schema_extra or {}
+                env_name = extra.get("env")
+                if env_name and env_name in os.environ:
+                    data[name] = os.environ[env_name]
+            super().__init__(**data)
 
 from ..schemas.config_models import (
     UnifiedConfig,
@@ -39,7 +54,9 @@ class Settings(BaseSettings):
 
     # Optional provider API keys
     openrouter_api_key: str = Field("", env="OPENROUTER_API_KEY")
-    openrouter_http_referer: str = Field("http://localhost", env="OPENROUTER_HTTP_REFERER")
+    openrouter_http_referer: str = Field(
+        "http://localhost", env="OPENROUTER_HTTP_REFERER"
+    )
     openrouter_app_title: str = Field("LLMSentinelRouter", env="OPENROUTER_APP_TITLE")
     groq_api_key: str = Field("", env="GROQ_API_KEY")
 
@@ -48,8 +65,8 @@ class Settings(BaseSettings):
     strong_model_id: str = Field("claude-3-opus-20240229", env="STRONG_MODEL_ID")
 
     # Budget & routing
-    max_cost_per_session: float = Field(25.0, env="MAX_COST_PER_SESSION")
-    initial_threshold: float = Field(0.9, env="INITIAL_THRESHOLD")
+    max_cost_per_session: float = Field(10.0, env="MAX_COST_PER_SESSION")
+    initial_threshold: float = Field(0.7, env="INITIAL_THRESHOLD")
     escalation_rate_limit: float = Field(0.05, env="ESCALATION_RATE_LIMIT")
 
     # Complexity threshold (for judge)
@@ -87,6 +104,9 @@ class Settings(BaseSettings):
     cors_origins: str = Field(
         "*", env="CORS_ORIGINS"
     )  # Comma-separated list, or "*" for all
+
+    # Admin access
+    admin_api_token: str = Field("", env="ADMIN_API_TOKEN")
 
     # Logging & Audit
     log_dir: str = Field("logs", env="LOG_DIR")

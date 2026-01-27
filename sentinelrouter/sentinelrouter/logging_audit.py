@@ -275,6 +275,7 @@ class RequestResponseLogger:
         end_time: datetime,
         tier: Optional[str] = None,
         use_judge: Optional[bool] = None,
+        latency_breakdown: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Log a request/response pair to a JSON file.
@@ -295,6 +296,7 @@ class RequestResponseLogger:
             "response": response,
             "routing_decision": routing_decision,
             "cost": cost,
+            "latency_breakdown": latency_breakdown,
         }
 
         # Write asynchronously using thread pool
@@ -320,6 +322,39 @@ class LoggingAudit:
         self.file_logger = RequestResponseLogger(requests_logs_dir)
         self.enable_file_logging = get_settings().enable_file_logging
 
+    def read_request_logs(
+        self, request_ids: List[str], max_files: int = 2000
+    ) -> Dict[str, Dict[str, Any]]:
+        """Load request log entries from disk for the given request IDs."""
+        if not request_ids:
+            return {}
+        logs_dir = get_logs_dir() / "requests"
+        if not logs_dir.exists():
+            return {}
+        pending = set(request_ids)
+        results: Dict[str, Dict[str, Any]] = {}
+        try:
+            files = sorted(
+                logs_dir.glob("*.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        except Exception:
+            return {}
+        for log_file in files[:max_files]:
+            if not pending:
+                break
+            try:
+                with open(log_file, "r", encoding="utf-8") as f:
+                    log_entry = json.load(f)
+                request_id = log_entry.get("request_id")
+                if request_id in pending:
+                    results[request_id] = log_entry
+                    pending.remove(request_id)
+            except Exception:
+                continue
+        return results
+
     async def log_request_response(
         self,
         session_id: str,
@@ -332,6 +367,7 @@ class LoggingAudit:
         end_time: Optional[datetime] = None,
         tier: Optional[str] = None,
         use_judge: Optional[bool] = None,
+        latency_breakdown: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Log a request/response to both database and file.
@@ -355,6 +391,8 @@ class LoggingAudit:
         # Get cost tracking fields
         cost_source = routing_decision.get("cost_source", "unknown")
         computed_cost = routing_decision.get("computed_cost")
+        if latency_breakdown is None:
+            latency_breakdown = routing_decision.get("latency_breakdown")
 
         # Database logging (synchronous but run in thread to avoid blocking)
         await asyncio.to_thread(
@@ -390,6 +428,7 @@ class LoggingAudit:
                 end_time=end_time,
                 tier=tier,
                 use_judge=use_judge,
+                latency_breakdown=latency_breakdown,
             )
 
     def log_routing_decision(

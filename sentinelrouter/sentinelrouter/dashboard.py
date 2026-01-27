@@ -7,10 +7,52 @@ Provides:
 - Tab 3: "Router Logic" - Diagnostics and routing decision logs
 """
 
-from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-import uvicorn
+try:
+    from fastapi import FastAPI, HTTPException, Depends
+    from fastapi.responses import HTMLResponse, JSONResponse
+except ModuleNotFoundError:  # pragma: no cover - allow unit tests without FastAPI
+    FastAPI = None
+    Request = object
+
+    class HTTPException(Exception):
+        pass
+
+    def Depends(_dependency=None):
+        return None
+
+    HTMLResponse = JSONResponse = object
+    StaticFiles = object
+
+    class _StubApp:
+        def get(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+        def post(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+        def put(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+        def delete(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+
+try:
+    import uvicorn
+except ModuleNotFoundError:  # pragma: no cover - allow unit tests without uvicorn
+    uvicorn = None
 from typing import Dict, Any, List, Optional
 import logging
 import asyncio
@@ -19,17 +61,27 @@ import json
 
 from .metrics import get_metrics_collector
 from .state_manager import get_state_manager
-from .config import get_unified_config, get_settings
+from .config import get_unified_config, get_runtime_config
 from .throttle_manager import get_throttle_manager
-from .router_logic import Router
-from .database import get_db
-from .models import RoutingDecision
-from sqlalchemy.orm import Session
+
+try:
+    from .database import get_db
+    from .models import RoutingDecision
+    from sqlalchemy.orm import Session
+except ModuleNotFoundError:  # pragma: no cover - allow unit tests without db deps
+    def get_db():
+        raise RuntimeError("Database dependencies are not installed")
+
+    RoutingDecision = None
+    Session = object
 
 logger = logging.getLogger(__name__)
 
 # Create dashboard app
-dashboard_app = FastAPI(title="SentinelRouter Enhanced Dashboard")
+if FastAPI:
+    dashboard_app = FastAPI(title="SentinelRouter Enhanced Dashboard")
+else:
+    dashboard_app = _StubApp()
 
 
 # Dependency for database session
@@ -250,6 +302,93 @@ async def dashboard_home():
                 background: white;
                 border-radius: 8px;
                 border: 1px solid #e2e8f0;
+                flex-wrap: wrap;
+            }
+            .api-keys-toolbar {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                margin: 12px 0 16px 0;
+                flex-wrap: wrap;
+            }
+            .live-edit-toggle {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                font-weight: 600;
+                color: #1e293b;
+            }
+            .live-edit-toggle input[type="checkbox"] {
+                width: 40px;
+                height: 20px;
+                appearance: none;
+                background: #cbd5e1;
+                border-radius: 999px;
+                position: relative;
+                outline: none;
+                cursor: pointer;
+                transition: background 0.2s ease;
+            }
+            .live-edit-toggle input[type="checkbox"]::after {
+                content: '';
+                width: 16px;
+                height: 16px;
+                background: #ffffff;
+                border-radius: 50%;
+                position: absolute;
+                top: 2px;
+                left: 2px;
+                transition: transform 0.2s ease;
+            }
+            .live-edit-toggle input[type="checkbox"]:checked {
+                background: #22c55e;
+            }
+            .live-edit-toggle input[type="checkbox"]:checked::after {
+                transform: translateX(20px);
+            }
+            .token-input {
+                padding: 8px 10px;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                min-width: 180px;
+                font-size: 0.9rem;
+            }
+            .api-key-input {
+                flex: 1;
+                padding: 8px 10px;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                font-family: monospace;
+            }
+            .btn-save-keys {
+                background: #0f172a;
+                color: #fff;
+                border: none;
+                padding: 8px 14px;
+                border-radius: 8px;
+                cursor: pointer;
+                font-weight: 600;
+            }
+            .btn-save-keys:disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+            }
+            .status-message {
+                font-size: 0.9rem;
+                padding: 4px 8px;
+                border-radius: 6px;
+            }
+            .status-note {
+                color: #475569;
+                background: #f1f5f9;
+            }
+            .status-success {
+                color: #166534;
+                background: #dcfce7;
+            }
+            .status-error {
+                color: #b91c1c;
+                background: #fee2e2;
             }
             .api-key-label {
                 font-weight: 600;
@@ -274,6 +413,52 @@ async def dashboard_home():
                 font-size: 0.85rem;
             }
             .btn-reveal:hover { background: #64748b; }
+            .btn-test-key {
+                background: #0ea5e9;
+                color: white;
+                border: none;
+                padding: 8px 14px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 0.85rem;
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .btn-test-key:hover { background: #0284c7; }
+            .btn-test-key:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+            }
+            .btn-test-key.is-loading .key-test-spinner {
+                display: inline-block;
+            }
+            .key-test-spinner {
+                display: none;
+                width: 12px;
+                height: 12px;
+                border: 2px solid rgba(255, 255, 255, 0.4);
+                border-top-color: #ffffff;
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+            }
+            .key-test-status {
+                font-size: 0.85rem;
+                font-weight: 600;
+                min-width: 140px;
+            }
+            .key-test-status.key-test-loading {
+                color: #0284c7;
+            }
+            .key-test-status.key-test-success {
+                color: #16a34a;
+            }
+            .key-test-status.key-test-error {
+                color: #dc2626;
+            }
+            @keyframes spin {
+                to { transform: rotate(360deg); }
+            }
             .sortable-list {
                 list-style: none;
                 padding: 0;
@@ -428,6 +613,27 @@ async def dashboard_home():
                 white-space: pre-wrap;
                 word-wrap: break-word;
                 color: #475569;
+            }
+            .latency-breakdown {
+                margin-top: 15px;
+                padding: 12px;
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+            }
+            .latency-breakdown-header {
+                font-weight: 700;
+                color: #1e293b;
+                margin-bottom: 8px;
+                font-size: 0.9rem;
+            }
+            .latency-breakdown-chart {
+                height: 90px;
+            }
+            .latency-breakdown-note {
+                margin-top: 6px;
+                color: #64748b;
+                font-size: 0.8rem;
             }
             .chart-container {
                 background: white;
@@ -615,6 +821,15 @@ async def dashboard_home():
                 
                 <div class="config-section">
                     <h3>API Keys</h3>
+                    <div class="api-keys-toolbar">
+                        <label class="live-edit-toggle">
+                            <input type="checkbox" id="liveEditToggle" onchange="toggleLiveEdit(this.checked)">
+                            <span>Live Edit</span>
+                        </label>
+                        <input type="password" id="adminTokenInput" class="token-input" placeholder="Admin token" oninput="cacheAdminToken(this.value)">
+                        <button class="btn-save-keys" id="saveKeysBtn" onclick="saveApiKeys()" disabled>💾 Save Keys</button>
+                        <span id="keysStatus" class="status-message status-note">Read-only</span>
+                    </div>
                     <div id="apiKeysContainer">
                         <!-- API keys will be populated here -->
                         <div class="api-key-row">
@@ -728,7 +943,12 @@ async def dashboard_home():
             let stateManager = null;
             let latencyChart = null;
             let allLogs = [];
-
+            const latencyBreakdownCharts = new Map();
+            let liveEditEnabled = false;
+            let apiKeysCache = {};
+            let apiKeysDraft = {};
+            let apiKeysDirty = false;
+            let apiKeyTypes = {};
             // Tab switching
             document.querySelectorAll('.tab').forEach(tab => {
                 tab.addEventListener('click', () => {
@@ -1066,10 +1286,12 @@ async def dashboard_home():
                 try {
                     const response = await fetch('/api/dashboard/configuration');
                     const data = await response.json();
+                    apiKeyTypes = data.api_key_types || {};
                     renderApiKeys(data.api_keys);
                     renderPriorityList(data.models);
                     renderRateLimits(data.models);
                     renderPricingTiers(data.models);
+                    updateKeysToolbar();
                     // Initialize sortable
                     new Sortable(document.getElementById('priorityList'), {
                         animation: 150,
@@ -1082,13 +1304,187 @@ async def dashboard_home():
 
             function renderApiKeys(keys) {
                 const container = document.getElementById('apiKeysContainer');
-                container.innerHTML = Object.entries(keys).map(([key, value]) => `
-                    <div class="api-key-row">
-                        <span class="api-key-label">${key}</span>
-                        <span class="api-key-masked">${maskApiKey(value)}</span>
-                        <button class="btn-reveal" onclick="revealKey('${key}', this)">Reveal</button>
-                    </div>
-                `).join('');
+                apiKeysCache = keys || {};
+                apiKeysDraft = { ...apiKeysCache };
+                apiKeysDirty = false;
+                const rows = Object.entries(apiKeysCache).map(([key, value]) => {
+                    if (liveEditEnabled) {
+                        const provider = apiKeyTypes[key] || '';
+                        return `
+                            <div class="api-key-row">
+                                <span class="api-key-label">${key}</span>
+                                <input class="api-key-input" type="password" data-key-id="${key}"
+                                    value="${escapeAttribute(value)}" oninput="handleKeyInput(this)">
+                                <button class="btn-reveal" onclick="toggleKeyVisibility(this)">Show</button>
+                                <button class="btn-test-key" data-key-id="${key}" data-provider="${provider}" onclick="testKey(this)">
+                                    <span class="btn-label">Test</span>
+                                    <span class="key-test-spinner" aria-hidden="true"></span>
+                                </button>
+                                <span class="key-test-status" data-key-id="${key}" aria-live="polite"></span>
+                            </div>
+                        `;
+                    }
+                    return `
+                        <div class="api-key-row">
+                            <span class="api-key-label">${key}</span>
+                            <span class="api-key-masked">${maskApiKey(value)}</span>
+                            <button class="btn-reveal" onclick="revealKey('${key}', this)">Reveal</button>
+                        </div>
+                    `;
+                });
+                container.innerHTML = rows.join('');
+                updateKeysToolbar();
+            }
+
+            function toggleLiveEdit(enabled) {
+                liveEditEnabled = enabled;
+                renderApiKeys(apiKeysCache);
+                setKeysStatus(enabled ? 'Live edit enabled' : 'Read-only', enabled ? 'status-note' : 'status-note');
+            }
+
+            function handleKeyInput(input) {
+                const keyId = input.getAttribute('data-key-id');
+                apiKeysDraft[keyId] = input.value;
+                apiKeysDirty = true;
+                updateKeysToolbar();
+            }
+
+            function toggleKeyVisibility(button) {
+                const row = button.closest('.api-key-row');
+                const input = row.querySelector('.api-key-input');
+                if (!input) return;
+                if (input.type === 'password') {
+                    input.type = 'text';
+                    button.textContent = 'Hide';
+                } else {
+                    input.type = 'password';
+                    button.textContent = 'Show';
+                }
+            }
+
+            function setKeyTestState(keyId, state, message) {
+                const statusEl = document.querySelector(`.key-test-status[data-key-id="${keyId}"]`);
+                const button = document.querySelector(`.btn-test-key[data-key-id="${keyId}"]`);
+                if (button) {
+                    button.disabled = state === 'loading';
+                    button.classList.toggle('is-loading', state === 'loading');
+                }
+                if (!statusEl) return;
+                statusEl.className = 'key-test-status';
+                if (state === 'loading') {
+                    statusEl.classList.add('key-test-loading');
+                    statusEl.textContent = 'Testing...';
+                    return;
+                }
+                if (state === 'success') {
+                    statusEl.classList.add('key-test-success');
+                    statusEl.textContent = `✓ ${message || 'Key valid'}`;
+                    return;
+                }
+                if (state === 'error') {
+                    statusEl.classList.add('key-test-error');
+                    statusEl.textContent = `✕ ${message || 'Key invalid'}`;
+                    return;
+                }
+                statusEl.textContent = '';
+            }
+
+            async function testKey(button) {
+                const keyId = button.getAttribute('data-key-id');
+                const provider = button.getAttribute('data-provider') || apiKeyTypes[keyId] || '';
+                const row = button.closest('.api-key-row');
+                const input = row ? row.querySelector('.api-key-input') : null;
+                const keyValue = input ? input.value : (apiKeysDraft[keyId] || '');
+                if (!keyId) return;
+                if (!provider) {
+                    setKeyTestState(keyId, 'error', 'Provider missing');
+                    return;
+                }
+                if (!keyValue) {
+                    setKeyTestState(keyId, 'error', 'Key is empty');
+                    return;
+                }
+                const token = getAdminToken();
+                if (!token) {
+                    setKeyTestState(keyId, 'error', 'Admin token required');
+                    return;
+                }
+                setKeyTestState(keyId, 'loading');
+
+                try {
+                    const response = await fetch('/admin/config/test-key', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Admin-Token': token
+                        },
+                        body: JSON.stringify({ key_id: keyId, provider, value: keyValue })
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        const message = payload?.message || payload?.detail || 'Validation failed';
+                        setKeyTestState(keyId, 'error', message);
+                        return;
+                    }
+                    if (payload.valid) {
+                        setKeyTestState(keyId, 'success', payload.message || 'Key valid');
+                    } else {
+                        setKeyTestState(keyId, 'error', payload.message || 'Key invalid');
+                    }
+                } catch (error) {
+                    setKeyTestState(keyId, 'error', 'Network error');
+                }
+            }
+
+            function cacheAdminToken(value) {
+                if (value) {
+                    localStorage.setItem('adminToken', value);
+                } else {
+                    localStorage.removeItem('adminToken');
+                }
+            }
+
+            function getAdminToken() {
+                const input = document.getElementById('adminTokenInput');
+                if (input && input.value) return input.value;
+                const cached = localStorage.getItem('adminToken');
+                if (cached) return cached;
+                const prompted = window.prompt('Enter admin token');
+                if (prompted) {
+                    localStorage.setItem('adminToken', prompted);
+                    if (input) input.value = prompted;
+                }
+                return prompted || '';
+            }
+
+            function updateKeysToolbar() {
+                const saveBtn = document.getElementById('saveKeysBtn');
+                if (saveBtn) {
+                    saveBtn.disabled = !(liveEditEnabled && apiKeysDirty);
+                }
+                if (!liveEditEnabled) {
+                    setKeysStatus('Read-only', 'status-note');
+                } else if (apiKeysDirty) {
+                    setKeysStatus('Unsaved changes', 'status-note');
+                } else {
+                    setKeysStatus('Live edit enabled', 'status-note');
+                }
+            }
+
+            function setKeysStatus(message, className) {
+                const status = document.getElementById('keysStatus');
+                if (!status) return;
+                status.textContent = message;
+                status.className = `status-message ${className}`;
+            }
+
+            function escapeAttribute(value) {
+                if (value === undefined || value === null) return '';
+                return String(value)
+                    .replace(/&/g, '&amp;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
             }
 
             function maskApiKey(key) {
@@ -1200,6 +1596,53 @@ async def dashboard_home():
                 container.appendChild(tierElement);
             }
 
+            async function saveApiKeys() {
+                if (!liveEditEnabled) return;
+                const updates = {};
+                Object.entries(apiKeysDraft).forEach(([keyId, value]) => {
+                    if (apiKeysCache[keyId] !== value) {
+                        updates[keyId] = { value };
+                    }
+                });
+                if (Object.keys(updates).length === 0) {
+                    setKeysStatus('No changes to save', 'status-note');
+                    apiKeysDirty = false;
+                    updateKeysToolbar();
+                    return;
+                }
+                const token = getAdminToken();
+                if (!token) {
+                    setKeysStatus('Admin token required', 'status-error');
+                    return;
+                }
+                setKeysStatus('Saving...', 'status-note');
+                try {
+                    const response = await fetch('/admin/config/keys', {
+                        method: 'PATCH',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Admin-Token': token
+                        },
+                        body: JSON.stringify({ keys: updates })
+                    });
+                    const payload = await response.json();
+                    if (!response.ok || !payload.success) {
+                        const message = payload?.error?.message || payload?.error || payload?.detail || 'Save failed';
+                        setKeysStatus(message, 'status-error');
+                        return;
+                    }
+                    Object.entries(updates).forEach(([keyId, entry]) => {
+                        apiKeysCache[keyId] = entry.value;
+                    });
+                    apiKeysDraft = { ...apiKeysCache };
+                    apiKeysDirty = false;
+                    renderApiKeys(apiKeysCache);
+                    setKeysStatus('Keys saved', 'status-success');
+                } catch (error) {
+                    setKeysStatus('Save failed', 'status-error');
+                }
+            }
+
             async function saveConfiguration() {
                 // Collect all changed settings
                 const changes = {
@@ -1268,6 +1711,15 @@ async def dashboard_home():
                             </div>
                             <div class="log-detail-item">Cycle: ${log.cycle_detected ? '⚠️ Yes' : 'No'}</div>
                         </div>
+                        ${log.latency_breakdown ? `
+                            <div class="latency-breakdown">
+                                <div class="latency-breakdown-header">⏱️ Latency Breakdown</div>
+                                <div class="latency-breakdown-chart">
+                                    <canvas id="latencyBreakdown-${safeDomId(log.request_id)}"></canvas>
+                                </div>
+                                <div class="latency-breakdown-note">Hover segments for ms and % of total latency.</div>
+                            </div>
+                        ` : ''}
                         ${log.request_preview || log.response_preview ? `
                             <div class="request-response-preview">
                                 ${log.request_preview ? `
@@ -1286,12 +1738,107 @@ async def dashboard_home():
                         ` : ''}
                     </div>
                 `).join('');
+                renderLatencyBreakdownCharts(logs);
             }
 
             function escapeHtml(text) {
                 const div = document.createElement('div');
                 div.textContent = text;
                 return div.innerHTML;
+            }
+
+            function safeDomId(value) {
+                return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+            }
+
+            function formatLatencyTooltip(label, valueMs, totalMs) {
+                const safeTotal = totalMs > 0 ? totalMs : 0;
+                const percent = safeTotal ? (valueMs / safeTotal) * 100 : 0;
+                return `${label}: ${valueMs.toFixed(1)} ms (${percent.toFixed(1)}%)`;
+            }
+
+            function buildLatencySegments(breakdown) {
+                if (!breakdown) return null;
+                const dnsMs = Number(breakdown.dns_ms ?? 0);
+                const connectionMs = Number(breakdown.connection_ms ?? dnsMs);
+                const ttftMs = Number(breakdown.ttft_ms ?? connectionMs);
+                const completionMs = Number(breakdown.completion_ms ?? ttftMs);
+                const totalMs = Number(breakdown.total_ms ?? completionMs);
+
+                const safeConnection = Math.max(connectionMs, dnsMs);
+                const safeTtft = Math.max(ttftMs, safeConnection);
+                const safeCompletion = Math.max(completionMs, safeTtft);
+                const safeTotal = Math.max(totalMs, safeCompletion);
+
+                return {
+                    dns: Math.max(dnsMs, 0),
+                    connection: Math.max(safeConnection - dnsMs, 0),
+                    ttft: Math.max(safeTtft - safeConnection, 0),
+                    completion: Math.max(safeTotal - safeTtft, 0),
+                    total: safeTotal
+                };
+            }
+
+            function renderLatencyBreakdownCharts(logs) {
+                latencyBreakdownCharts.forEach(chart => chart.destroy());
+                latencyBreakdownCharts.clear();
+
+                if (!logs) return;
+                logs.forEach(log => {
+                    if (!log.latency_breakdown) return;
+                    const chartId = `latencyBreakdown-${safeDomId(log.request_id)}`;
+                    const canvas = document.getElementById(chartId);
+                    if (!canvas) return;
+
+                    const segments = buildLatencySegments(log.latency_breakdown);
+                    if (!segments || segments.total <= 0) return;
+
+                    const datasets = [
+                        { label: 'DNS', data: [segments.dns], backgroundColor: '#93c5fd' },
+                        { label: 'Connection', data: [segments.connection], backgroundColor: '#60a5fa' },
+                        { label: 'TTFT', data: [segments.ttft], backgroundColor: '#38bdf8' },
+                        { label: 'Completion', data: [segments.completion], backgroundColor: '#0ea5e9' }
+                    ];
+
+                    const chart = new Chart(canvas, {
+                        type: 'bar',
+                        data: { labels: ['Latency'], datasets },
+                        options: {
+                            indexAxis: 'y',
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: {
+                                mode: 'nearest',
+                                intersect: true
+                            },
+                            scales: {
+                                x: {
+                                    stacked: true,
+                                    ticks: {
+                                        callback: value => `${value} ms`
+                                    }
+                                },
+                                y: {
+                                    stacked: true,
+                                    display: false
+                                }
+                            },
+                            plugins: {
+                                legend: { position: 'bottom' },
+                                tooltip: {
+                                    callbacks: {
+                                        label: context => {
+                                            const value = context.raw || 0;
+                                            return formatLatencyTooltip(context.dataset.label, value, segments.total);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+
+                    latencyBreakdownCharts.set(chartId, chart);
+                });
             }
 
             function refreshLogs() {
@@ -1514,13 +2061,10 @@ async def get_dashboard_metrics(db: Session = Depends(get_dbsession)):
 async def get_configuration():
     """Get configuration data for Tab 2."""
     config = get_unified_config()
-    settings = get_settings()
-    # Extract API keys from environment (masked)
-    api_keys = {
-        "DEEPSEEK_API_KEY": settings.deepseek_api_key,
-        "ANTHROPIC_API_KEY": settings.anthropic_api_key,
-        "GEMINI_BACKUP1_API_KEY": settings.gemini_backup1_api_key,
-        "GEMINI_BACKUP2_API_KEY": settings.gemini_backup2_api_key,
+    runtime_config = get_runtime_config()
+    api_keys = {key_id: key.value for key_id, key in runtime_config.keys.items()}
+    api_key_types = {
+        key_id: key.type.value for key_id, key in runtime_config.keys.items()
     }
     models = []
     for model_id, model_config in config.models.items():
@@ -1528,6 +2072,7 @@ async def get_configuration():
     return JSONResponse(
         {
             "api_keys": api_keys,
+            "api_key_types": api_key_types,
             "models": models,
             "system_settings": config.system_settings.model_dump(mode="json"),
         }
@@ -1552,10 +2097,9 @@ async def get_routing_logs(
     # Load request logs if preview is requested
     request_logs = {}
     if include_preview:
-        # TODO: Implement read_request_log method in LoggingAudit class
-        # Currently LoggingAudit only writes logs, doesn't have a read method
-        # Skipping preview feature until read functionality is implemented
-        pass
+        audit_logger = LoggingAudit(db)
+        request_ids = [log.request_id for log in logs if log.request_id]
+        request_logs = audit_logger.read_request_logs(request_ids)
 
     for log in logs:
         log_entry = {
@@ -1576,6 +2120,7 @@ async def get_routing_logs(
         # Add request/response preview if available
         if include_preview and log.request_id in request_logs:
             req_log = request_logs[log.request_id]
+            log_entry["latency_breakdown"] = req_log.get("latency_breakdown")
             # Extract request preview (first message)
             if "request" in req_log and "messages" in req_log["request"]:
                 messages = req_log["request"]["messages"]
@@ -1868,7 +2413,46 @@ def prepare_line_chart_data(
     }
 
 
+def compute_latency_segments(breakdown: Dict[str, Any]) -> Dict[str, float]:
+    """Convert timestamp-style latency_breakdown into component durations."""
+    if not breakdown:
+        return {
+            "dns": 0.0,
+            "connection": 0.0,
+            "ttft": 0.0,
+            "completion": 0.0,
+            "total": 0.0,
+        }
+
+    dns_ms = float(breakdown.get("dns_ms", 0.0) or 0.0)
+    connection_ms = float(breakdown.get("connection_ms", dns_ms) or dns_ms)
+    ttft_ms = float(breakdown.get("ttft_ms", connection_ms) or connection_ms)
+    completion_ms = float(breakdown.get("completion_ms", ttft_ms) or ttft_ms)
+    total_ms = float(breakdown.get("total_ms", completion_ms) or completion_ms)
+
+    safe_connection = max(connection_ms, dns_ms)
+    safe_ttft = max(ttft_ms, safe_connection)
+    safe_completion = max(completion_ms, safe_ttft)
+    safe_total = max(total_ms, safe_completion)
+
+    return {
+        "dns": max(dns_ms, 0.0),
+        "connection": max(safe_connection - dns_ms, 0.0),
+        "ttft": max(safe_ttft - safe_connection, 0.0),
+        "completion": max(safe_total - safe_ttft, 0.0),
+        "total": max(safe_total, 0.0),
+    }
+
+
+def format_latency_tooltip(label: str, value_ms: float, total_ms: float) -> str:
+    """Format tooltip text with milliseconds and percentage."""
+    percent = (value_ms / total_ms * 100) if total_ms else 0.0
+    return f"{label}: {value_ms:.1f} ms ({percent:.1f}%)"
+
+
 def start_dashboard_server(host: str = "0.0.0.0", port: int = 8001):
     """Start the enhanced dashboard server."""
+    if uvicorn is None:
+        raise RuntimeError("uvicorn is not installed")
     logger.info(f"Starting enhanced dashboard on http://{host}:{port}")
     uvicorn.run(dashboard_app, host=host, port=port, log_level="info")
