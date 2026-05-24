@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test runner script for SentinelRouter
+# Test runner script for SentinelRouter (Go implementation)
 # Usage: ./run_tests.sh [options]
 
 # Colors
@@ -7,13 +7,13 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${YELLOW}🧪 SentinelRouter Test Suite${NC}"
+echo -e "${YELLOW}SentinelRouter Test Suite${NC}"
 echo ""
 
 # Default: run all tests
 if [ $# -eq 0 ]; then
-    echo "Running all tests..."
-    python3 -m pytest tests/ -v
+    echo "Running all Go tests..."
+    go test ./...
     exit $?
 fi
 
@@ -21,27 +21,28 @@ fi
 case "$1" in
     --unit)
         echo "Running unit tests only..."
-        python3 -m pytest tests/unit/ -v
+        go test ./internal/... ./cmd/...
         ;;
     --integration)
-        echo "Running integration tests..."
-        python3 -m pytest tests/test_integration.py tests/test_openrouter_client.py tests/test_groq_client.py tests/test_rate_limiter.py tests/api/test_server.py -v
+        echo "Running integration/e2e tests..."
+        go test ./internal/server
         ;;
     --fast)
-        echo "Running quick test suite (no output)..."
-        python3 -m pytest tests/ -q --tb=no
+        echo "Running quick test suite..."
+        go test ./... -count=1
         ;;
     --coverage)
         echo "Running tests with coverage..."
-        python3 -m pytest tests/ --cov=sentinelrouter --cov-report=html --cov-report=term
+        go test ./... -coverprofile=coverage.out
+        go tool cover -func=coverage.out
         ;;
     --help|-h)
         echo "Usage: ./run_tests.sh [option]"
         echo ""
         echo "Options:"
-        echo "  (no args)      Run all tests with verbose output"
+        echo "  (no args)      Run all Go tests"
         echo "  --unit         Run only unit tests"
-        echo "  --integration  Run only integration tests"
+        echo "  --integration  Run HTTP e2e/integration tests"
         echo "  --fast         Run quick test suite"
         echo "  --coverage     Run tests with coverage report"
         echo "  --help, -h     Show this help message"

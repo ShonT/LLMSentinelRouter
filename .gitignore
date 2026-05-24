@@ -1,20 +1,9 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-*.egg
-*.egg-info/
+# Build artifacts
 dist/
 build/
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-venv/
-env/
+bin/
+
+# Local environments
 .env
 .env.local
 .env.development.local
@@ -45,9 +34,6 @@ data/
 
 # Sentry
 sentry
-
-# Jupyter Notebook
-.ipynb_checkpoints
 
 # Misc
 *.bak
