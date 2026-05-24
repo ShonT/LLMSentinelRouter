@@ -48,7 +48,7 @@ type Router struct {
 	budget        *budget.Manager
 	threshold     *threshold.Dynamic
 	cycles        *cycle.Registry
-	cache         *semantic.Cache
+	cache         *semantic.PersistentCache
 	limiter       *rate.Limiter
 	redactor      *redaction.Engine
 	metrics       *metrics.Collector
@@ -56,6 +56,18 @@ type Router struct {
 	mu            sync.RWMutex
 	modelStatus   map[string]string
 	modelStats    map[string]*ModelRuntime
+	statsMu       sync.Mutex
+	judgeInvoked  int64
+	judgeSkipped  int64
+	cacheHits     int64
+	cacheMisses   int64
+}
+
+type AdminRuntimeStats struct {
+	JudgeInvoked int64 `json:"judge_invoked"`
+	JudgeSkipped int64 `json:"judge_skipped"`
+	CacheHits    int64 `json:"cache_hits"`
+	CacheMisses  int64 `json:"cache_misses"`
 }
 
 type ModelRuntime struct {
@@ -75,7 +87,7 @@ func New(settings config.Settings, manager *config.Manager, store *storage.Store
 		budget:        budget.NewManager(store, settings.MaxCostPerSession),
 		threshold:     threshold.New(settings.TargetEscalationRate, settings.RollingWindowSize, settings.InitialThreshold),
 		cycles:        cycle.NewRegistry(1000, settings.CycleDetectionThreshold, settings.CycleDetectionWindowSize),
-		cache:         semantic.NewCache(settings.SemanticCacheMinSamples, settings.SemanticCacheConfidence, settings.SemanticCacheTTLSeconds),
+		cache:         semantic.NewPersistentCache(store, settings.SemanticCacheMinSamples, settings.SemanticCacheConfidence, settings.SemanticCacheTTLSeconds),
 		limiter:       rate.New(0.95),
 		redactor:      redaction.New(settings.RedactionMode, settings.RedactionStrategy, settings.RedactionSalt, settings.RedactionCategories),
 		metrics:       collector,
@@ -110,6 +122,11 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 	cacheRoute, cacheConfidence, cacheOK := "", 0.0, false
 	if semanticEnabled {
 		cacheRoute, cacheConfidence, cacheOK = r.cache.ConfidentRoute(prompt, redactedMessages)
+		if cacheOK {
+			r.recordCacheHit()
+		} else {
+			r.recordCacheMiss()
+		}
 	}
 	semanticHash := semantic.HashPayload(prompt, redactedMessages)
 	r.metrics.Record("semantic_cache", map[string]any{
@@ -140,9 +157,13 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 		}
 	} else if useJudge != nil && !*useJudge {
 		judgeResult = judge.Result{ComplexityScore: 0.0, ImpactScope: "LOW", Reasoning: "Judge skipped by request (use_judge=false)"}
+		r.recordJudgeSkipped("explicit_skip_use_judge_false")
 	} else if useJudge != nil && *useJudge {
 		judgeInvoked = true
 		judgeResult = judge.New(cfg, r.clientFactory).Evaluate(ctx, prompt)
+		r.recordJudgeInvoked(judgeResult)
+	} else {
+		r.recordJudgeSkipped("conditional_mode_deferred")
 	}
 	currentThreshold := r.threshold.Threshold()
 	strictMode := r.settings.EnableDynamicThreshold && r.threshold.IsStrictMode()
@@ -165,6 +186,11 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 	if err != nil && conditionalWeakCall && contextTimedOut(err, callCtx) {
 		judgeInvoked = true
 		judgeResult = judge.New(cfg, r.clientFactory).Evaluate(ctx, prompt)
+		r.recordJudgeInvoked(judgeResult)
+		r.metrics.Record("judge_timeout_escalation", map[string]any{
+			"session_id": sessionID,
+			"timeout_ms": r.conditionalJudgeTimeout().Milliseconds(),
+		})
 		currentThreshold = r.threshold.Threshold()
 		strictMode = r.settings.EnableDynamicThreshold && r.threshold.IsStrictMode()
 		routeDecision = decideRoute(judgeResult.ComplexityScore, judgeResult.ImpactScope, currentThreshold, strictMode, cycleDetected)
@@ -183,7 +209,7 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 		detector.Add(prompt, response.Content)
 	}
 	finalCost, costSource, computedCost := finalCost(response)
-	if err := r.budget.AddCost(ctx, sessionID, finalCost); err != nil {
+	if err := r.budget.SettleCost(ctx, sessionID, estimatedWorstCaseCost, finalCost); err != nil {
 		return Result{}, err
 	}
 	session, err := r.store.GetSessionRequired(ctx, sessionID)
@@ -232,6 +258,17 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 	}
 	r.limiter.Record(modelUsed, response.Usage.TotalTokens)
 	r.recordModelRuntime(modelUsed, response.Usage.TotalTokens, finalCost)
+	r.metrics.Record("overall_request_latency", map[string]any{
+		"session_id": sessionID,
+		"latency_ms": requestLatency,
+		"status":     "success",
+	})
+	r.metrics.Record(resultTier+"_model_latency", map[string]any{
+		"session_id": sessionID,
+		"model_id":   modelUsed,
+		"latency_ms": modelLatency,
+		"status":     "success",
+	})
 	r.metrics.Record("routing_decision", map[string]any{
 		"session_id":       sessionID,
 		"request_id":       requestID,
@@ -273,7 +310,7 @@ func (r *Router) UpdatePolicy(settings config.Settings) {
 	r.budget.SetMaxCostPerSession(settings.MaxCostPerSession)
 	r.threshold = threshold.New(settings.TargetEscalationRate, settings.RollingWindowSize, settings.InitialThreshold)
 	r.cycles = cycle.NewRegistry(1000, settings.CycleDetectionThreshold, settings.CycleDetectionWindowSize)
-	r.cache = semantic.NewCache(settings.SemanticCacheMinSamples, settings.SemanticCacheConfidence, settings.SemanticCacheTTLSeconds)
+	r.cache = semantic.NewPersistentCache(r.store, settings.SemanticCacheMinSamples, settings.SemanticCacheConfidence, settings.SemanticCacheTTLSeconds)
 	r.redactor = redaction.New(settings.RedactionMode, settings.RedactionStrategy, settings.RedactionSalt, settings.RedactionCategories)
 }
 
@@ -300,6 +337,73 @@ func (r *Router) SetAllModelStatus(cfg *config.SentinelConfig, status string) {
 	for modelID := range cfg.Models {
 		r.modelStatus[modelID] = status
 	}
+}
+
+func (r *Router) ResetAllModelCosts() {
+	cfg := r.configManager.Current()
+	if cfg == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now().UTC()
+	for modelID := range cfg.Models {
+		stats := r.modelStats[modelID]
+		if stats == nil {
+			stats = &ModelRuntime{}
+			r.modelStats[modelID] = stats
+		}
+		stats.TotalCostSession = 0
+		stats.LastUpdated = &now
+	}
+}
+
+func (r *Router) RuntimeStats() AdminRuntimeStats {
+	r.statsMu.Lock()
+	defer r.statsMu.Unlock()
+	return AdminRuntimeStats{
+		JudgeInvoked: r.judgeInvoked,
+		JudgeSkipped: r.judgeSkipped,
+		CacheHits:    r.cacheHits,
+		CacheMisses:  r.cacheMisses,
+	}
+}
+
+func (r *Router) SemanticCacheSummary(ctx context.Context) (hits, misses, clusters int, err error) {
+	if r.cache == nil {
+		return 0, 0, 0, nil
+	}
+	return r.cache.Summary(ctx)
+}
+
+func (r *Router) recordJudgeInvoked(result judge.Result) {
+	r.statsMu.Lock()
+	r.judgeInvoked++
+	r.statsMu.Unlock()
+	r.metrics.Record("judge_latency", map[string]any{
+		"judge_id":   result.JudgeID,
+		"latency_ms": result.LatencyMS,
+		"status":     "success",
+	})
+}
+
+func (r *Router) recordJudgeSkipped(reason string) {
+	r.statsMu.Lock()
+	r.judgeSkipped++
+	r.statsMu.Unlock()
+	r.metrics.Record("judge_skip", map[string]any{"reason": reason})
+}
+
+func (r *Router) recordCacheHit() {
+	r.statsMu.Lock()
+	r.cacheHits++
+	r.statsMu.Unlock()
+}
+
+func (r *Router) recordCacheMiss() {
+	r.statsMu.Lock()
+	r.cacheMisses++
+	r.statsMu.Unlock()
 }
 
 func (r *Router) ResetModelCost(modelID string) {

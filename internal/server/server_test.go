@@ -272,6 +272,51 @@ func TestDashboardAndAdminConfigFlows(t *testing.T) {
 	})
 }
 
+func TestDashboardResetAllCostsClearsRuntimeTotals(t *testing.T) {
+	app := newTestServer(t)
+	app.router.RuntimeFor("weak-deepseek", app.configManager.Current().Models["weak-deepseek"])
+	req := httptest.NewRequest(http.MethodPost, "/api/dashboard/model/weak-deepseek/reset-cost", nil)
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("reset model status = %d", rr.Code)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/dashboard/reset-all-costs", nil)
+	rr = httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("reset all status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	runtime := app.router.RuntimeFor("weak-deepseek", app.configManager.Current().Models["weak-deepseek"])
+	if runtime.TotalCostSession != 0 {
+		t.Fatalf("total cost = %g, want 0", runtime.TotalCostSession)
+	}
+}
+
+func TestChatRejectsStreamingRequests(t *testing.T) {
+	app := newTestServer(t)
+	body := `{"messages":[{"role":"user","content":"hello"}],"stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestChatBudgetExceededUses402(t *testing.T) {
+	app := newTestServer(t)
+	app.settings.MaxCostPerSession = 0.01
+	app.router.UpdatePolicy(app.settings)
+	body := `{"messages":[{"role":"user","content":"hello"}],"session_id":"budget-test","use_judge":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestChatRejectsInvalidRequests(t *testing.T) {
 	app := newTestServer(t)
 	cases := []struct {

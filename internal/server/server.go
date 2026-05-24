@@ -28,13 +28,14 @@ import (
 var dashboardHTML string
 
 type Server struct {
-	settings        config.Settings
-	configManager   *config.Manager
-	store           *storage.Store
-	router          *router.Router
-	metrics         *metrics.Collector
-	sessionDefaults SessionDefaults
-	mu              sync.Mutex
+	settings            config.Settings
+	configManager       *config.Manager
+	store               *storage.Store
+	router              *router.Router
+	metrics             *metrics.Collector
+	sessionDefaults     SessionDefaults
+	sessionDefaultsPath string
+	mu                  sync.Mutex
 }
 
 type SessionDefaults struct {
@@ -45,18 +46,21 @@ type SessionDefaults struct {
 }
 
 func New(settings config.Settings, manager *config.Manager, store *storage.Store, collector *metrics.Collector) *Server {
-	return &Server{
-		settings:      settings,
-		configManager: manager,
-		store:         store,
-		router:        router.New(settings, manager, store, collector),
-		metrics:       collector,
+	s := &Server{
+		settings:            settings,
+		configManager:       manager,
+		store:               store,
+		router:              router.New(settings, manager, store, collector),
+		metrics:             collector,
+		sessionDefaultsPath: filepath.Join(storage.DataDir(settings.DatabaseURL), "session_defaults.json"),
 		sessionDefaults: SessionDefaults{
 			DefaultSessionID:  "default-uuid-001",
 			DefaultTier:       "free",
 			SessionIDStrategy: "uuid",
 		},
 	}
+	s.loadSessionDefaults()
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -221,6 +225,10 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON request.")
 		return
 	}
+	if req.Stream {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Streaming responses are not supported yet. Set stream to false.")
+		return
+	}
 	if len(req.Messages) == 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Messages array cannot be empty.")
 		return
@@ -275,7 +283,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusInternalServerError
 		errorType := "internal_error"
 		if strings.Contains(strings.ToLower(err.Error()), "budget exceeded") {
-			status = http.StatusTooManyRequests
+			status = http.StatusPaymentRequired
 			errorType = "budget_exceeded"
 		}
 		writeError(w, status, errorType, err.Error())
@@ -321,7 +329,6 @@ func (s *Server) updateSessionDefaults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if raw, ok := updates["default_session_id"]; ok {
 		_ = json.Unmarshal(raw, &s.sessionDefaults.DefaultSessionID)
 	}
@@ -341,14 +348,21 @@ func (s *Server) updateSessionDefaults(w http.ResponseWriter, r *http.Request) {
 	if raw, ok := updates["session_id_strategy"]; ok {
 		_ = json.Unmarshal(raw, &s.sessionDefaults.SessionIDStrategy)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Session defaults updated successfully", "data": s.sessionDefaults})
+	s.mu.Unlock()
+	if err := s.saveSessionDefaults(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"success": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Session defaults updated successfully", "data": s.currentDefaults()})
 }
 
 func (s *Server) regenerateSessionID(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.sessionDefaults.DefaultSessionID = router.NewID()
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Session ID regenerated successfully", "data": map[string]string{"default_session_id": s.sessionDefaults.DefaultSessionID}})
+	newID := s.sessionDefaults.DefaultSessionID
+	s.mu.Unlock()
+	_ = s.saveSessionDefaults()
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Session ID regenerated successfully", "data": map[string]string{"default_session_id": newID}})
 }
 
 func (s *Server) dashboardLive(w http.ResponseWriter, r *http.Request) {
@@ -397,6 +411,7 @@ func (s *Server) dashboardModelStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dashboardResetAllCosts(w http.ResponseWriter, r *http.Request) {
+	s.router.ResetAllModelCosts()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "success", "message": "All costs reset"})
 }
 
@@ -411,19 +426,20 @@ func (s *Server) dashboardStopAll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dashboardMetrics(w http.ResponseWriter, r *http.Request) {
+	aggregate := s.metrics.DashboardAggregate(10000)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"total_fallbacks":       0,
-		"judge_latency":         map[string]any{},
-		"weak_model_latency":    map[string]any{},
-		"strong_model_latency":  map[string]any{},
-		"latency_series":        map[string]any{"labels": []string{}, "judge_latency": []float64{}, "weak_model_latency": []float64{}, "strong_model_latency": []float64{}, "overall_request_latency": []float64{}},
-		"judge_success_rate":    0,
-		"judge_skip_rate":       0,
-		"judge_call_count":      0,
-		"judge_fallback_count":  0,
-		"judge_breakdown":       map[string]any{},
-		"fallback_chain":        []any{},
-		"recent_metrics_sample": s.metrics.Recent(50),
+		"total_fallbacks":       aggregate.TotalFallbacks,
+		"judge_latency":         aggregate.JudgeLatency,
+		"weak_model_latency":    aggregate.WeakModelLatency,
+		"strong_model_latency":  aggregate.StrongModelLatency,
+		"latency_series":        aggregate.LatencySeries,
+		"judge_success_rate":    aggregate.JudgeSuccessRate,
+		"judge_skip_rate":       aggregate.JudgeSkipRate,
+		"judge_call_count":      aggregate.JudgeCallCount,
+		"judge_fallback_count":  aggregate.JudgeFallbackCount,
+		"judge_breakdown":       aggregate.JudgeBreakdown,
+		"fallback_chain":        aggregate.FallbackChain,
+		"recent_metrics_sample": aggregate.RecentMetricsSample,
 	})
 }
 
@@ -843,6 +859,18 @@ func (s *Server) getAdminState(w http.ResponseWriter, r *http.Request) {
 	weak := cfg.RoutingPolicy.WeakTier.Order
 	strong := cfg.RoutingPolicy.StrongTier.Order
 	summary, _ := s.store.MetricsSummary(r.Context(), strongModelSet(cfg))
+	runtimeStats := s.router.RuntimeStats()
+	cacheHits, cacheMisses, clusters, _ := s.router.SemanticCacheSummary(r.Context())
+	totalCache := cacheHits + cacheMisses
+	hitRate := 0.0
+	if totalCache > 0 {
+		hitRate = float64(cacheHits) / float64(totalCache)
+	}
+	judgeTotal := runtimeStats.JudgeInvoked + runtimeStats.JudgeSkipped
+	skipRate := 0.0
+	if judgeTotal > 0 {
+		skipRate = float64(runtimeStats.JudgeSkipped) / float64(judgeTotal)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"data": map[string]any{
@@ -851,9 +879,26 @@ func (s *Server) getAdminState(w http.ResponseWriter, r *http.Request) {
 				"strong_models": strong,
 				"routing_order": append(append([]string{}, weak...), strong...),
 			},
-			"judge":          map[string]any{"invoked_count": 0, "skipped_count": 0, "skip_rate": 0, "success_rate": 0, "avg_latency_ms": 0},
-			"semantic_cache": map[string]any{"hit_count": 0, "miss_count": 0, "hit_rate": 0, "active_clusters": 0, "judge_skip_attribution": 0},
-			"escalation":     map[string]any{"current_rate": summary.EscalationRate, "target_rate": s.settings.TargetEscalationRate, "is_strict_mode": summary.EscalationRate > s.settings.TargetEscalationRate, "effective_threshold": s.settings.InitialThreshold},
+			"judge": map[string]any{
+				"invoked_count":  runtimeStats.JudgeInvoked,
+				"skipped_count":  runtimeStats.JudgeSkipped,
+				"skip_rate":      skipRate,
+				"success_rate":   1 - skipRate,
+				"avg_latency_ms": 0,
+			},
+			"semantic_cache": map[string]any{
+				"hit_count":              cacheHits,
+				"miss_count":             cacheMisses,
+				"hit_rate":               hitRate,
+				"active_clusters":        clusters,
+				"judge_skip_attribution": runtimeStats.CacheHits,
+			},
+			"escalation": map[string]any{
+				"current_rate":        summary.EscalationRate,
+				"target_rate":         s.settings.TargetEscalationRate,
+				"is_strict_mode":      summary.EscalationRate > s.settings.TargetEscalationRate,
+				"effective_threshold": s.settings.InitialThreshold,
+			},
 		},
 	})
 }
@@ -945,16 +990,27 @@ func (s *Server) patchRawConfig(mutator func(map[string]any) error) error {
 	return s.configManager.ForceReload()
 }
 
-func (s *Server) setAllModelsEnabled(enabled bool) error {
-	return s.patchRawConfig(func(raw map[string]any) error {
-		models, _ := raw["models"].(map[string]any)
-		for _, value := range models {
-			if model, ok := value.(map[string]any); ok {
-				model["enabled"] = enabled
-			}
-		}
-		return nil
-	})
+func (s *Server) loadSessionDefaults() {
+	data, err := os.ReadFile(s.sessionDefaultsPath)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = json.Unmarshal(data, &s.sessionDefaults)
+}
+
+func (s *Server) saveSessionDefaults() error {
+	s.mu.Lock()
+	payload, err := json.MarshalIndent(s.sessionDefaults, "", "  ")
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.sessionDefaultsPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(s.sessionDefaultsPath, append(payload, '\n'), 0o644)
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {

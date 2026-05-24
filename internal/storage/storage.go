@@ -366,6 +366,18 @@ func (s *Store) MetricsSummary(ctx context.Context, strongModels map[string]bool
 	return summary, nil
 }
 
+func DataDir(databaseURL string) string {
+	path, err := sqlitePath(databaseURL)
+	if err != nil || path == "" {
+		return "./data"
+	}
+	dir := filepath.Dir(path)
+	if dir == "" || dir == "." {
+		return "./data"
+	}
+	return dir
+}
+
 func sqlitePath(databaseURL string) (string, error) {
 	if databaseURL == "" {
 		return "./data/sentinelrouter.db", nil
