@@ -45,6 +45,9 @@ type Settings struct {
 	Host                     string
 	Port                     string
 	DashboardPort            string
+	JudgeFailureThreshold    int
+	JudgeCooldownSeconds     int
+	JudgeMaxAttempts         int
 }
 
 func LoadSettings() Settings {

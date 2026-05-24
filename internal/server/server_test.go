@@ -293,14 +293,14 @@ func TestDashboardResetAllCostsClearsRuntimeTotals(t *testing.T) {
 	}
 }
 
-func TestChatRejectsStreamingRequests(t *testing.T) {
+func TestChatStreamingIsSupported(t *testing.T) {
 	app := newTestServer(t)
-	body := `{"messages":[{"role":"user","content":"hello"}],"stream":true}`
+	body := `{"messages":[{"role":"user","content":"hello"}],"stream":true,"use_judge":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	rr := httptest.NewRecorder()
 	app.Handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "not supported") {
+		t.Fatalf("streaming should be supported, got status = %d body=%s", rr.Code, rr.Body.String())
 	}
 }
 

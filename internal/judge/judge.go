@@ -26,12 +26,16 @@ type ClientFactory interface {
 }
 
 type Judge struct {
-	config  *config.SentinelConfig
-	factory ClientFactory
+	config   *config.SentinelConfig
+	registry *Registry
 }
 
-func New(cfg *config.SentinelConfig, factory ClientFactory) *Judge {
-	return &Judge{config: cfg, factory: factory}
+func New(cfg *config.SentinelConfig, factory ClientFactory, settings config.Settings) *Judge {
+	health := NewHealthTracker(settings.JudgeFailureThreshold, settings.JudgeCooldownSeconds)
+	return &Judge{
+		config:   cfg,
+		registry: NewRegistry(cfg, factory, health, settings.JudgeMaxAttempts),
+	}
 }
 
 func (j *Judge) Evaluate(ctx context.Context, prompt string) Result {
@@ -39,30 +43,16 @@ func (j *Judge) Evaluate(ctx context.Context, prompt string) Result {
 	if j.config == nil || !j.config.Judge.Enabled {
 		result := heuristic(prompt)
 		result.LatencyMS = float64(time.Since(start).Milliseconds())
+		result.JudgeID = "heuristic"
 		return result
 	}
-	for _, modelID := range j.config.Judge.ModelOrder {
-		model, ok := j.config.Models[modelID]
-		if !ok || !model.Enabled {
-			continue
-		}
-		apiKey, ok := firstKey(j.config, model)
-		if !ok || apiKey == "" {
-			continue
-		}
-		client := j.factory.NewClient(model.Provider, apiKey, model)
-		result, err := callJudge(ctx, client, prompt)
-		_ = client.Close()
-		if err == nil {
-			result.JudgeID = modelID
-			result.LatencyMS = float64(time.Since(start).Milliseconds())
-			return result
-		}
-	}
-	result := heuristic(prompt)
-	result.Reasoning = "Judge unavailable, using heuristic fallback."
+	result := j.registry.Evaluate(ctx, j.config, prompt)
 	result.LatencyMS = float64(time.Since(start).Milliseconds())
 	return result
+}
+
+func (j *Judge) RegistryStatus() []map[string]any {
+	return j.registry.RegistryStatus(j.config)
 }
 
 func ComplexityToRoute(score, threshold float64) string {
