@@ -122,6 +122,15 @@ func (c *Cache) Reset() {
 	c.stats = map[string]*Stats{}
 }
 
+func (c *Cache) LoadFromStats(entries map[string]Stats) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for hash, entry := range entries {
+		cp := entry
+		c.stats[hash] = &cp
+	}
+}
+
 func confidence(stats *Stats) float64 {
 	routable := stats.WeakCalls + stats.StrongCalls
 	if routable == 0 {
