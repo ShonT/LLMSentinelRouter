@@ -90,6 +90,9 @@ func LoadSettings() Settings {
 		Host:                     envString("HOST", "0.0.0.0"),
 		Port:                     envString("PORT", "8000"),
 		DashboardPort:            envString("DASHBOARD_PORT", "8001"),
+		JudgeFailureThreshold:    envInt("JUDGE_FAILURE_THRESHOLD", 3),
+		JudgeCooldownSeconds:     envInt("JUDGE_COOLDOWN_SECONDS", 60),
+		JudgeMaxAttempts:         envInt("JUDGE_MAX_ATTEMPTS", 3),
 	}
 }
 

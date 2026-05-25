@@ -22,6 +22,30 @@ type Message struct {
 	Name    string `json:"name,omitempty"`
 }
 
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+		Name    string          `json:"name,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.Role = raw.Role
+	m.Name = raw.Name
+	m.Content = ""
+	if len(raw.Content) == 0 || bytes.Equal(bytes.TrimSpace(raw.Content), []byte("null")) {
+		return nil
+	}
+	var content string
+	if err := json.Unmarshal(raw.Content, &content); err == nil {
+		m.Content = content
+		return nil
+	}
+	m.Content = string(bytes.TrimSpace(raw.Content))
+	return nil
+}
+
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
@@ -113,7 +137,9 @@ func (c *HTTPClient) ChatCompletionStream(ctx context.Context, messages []Messag
 	case config.ProviderDeepSeek, config.ProviderGroq, config.ProviderOpenRouter:
 		return c.chatOpenAICompatibleStream(ctx, messages, opts, handler)
 	default:
-		resp, err := c.ChatCompletion(ctx, messages, opts)
+		bufferedOpts := opts
+		bufferedOpts.Stream = false
+		resp, err := c.ChatCompletion(ctx, messages, bufferedOpts)
 		if err != nil {
 			return resp, err
 		}
@@ -184,7 +210,6 @@ func (c *HTTPClient) chatOpenAICompatible(ctx context.Context, messages []Messag
 		Cost:    c.cost(parsed.Usage.PromptTokens, parsed.Usage.CompletionTokens),
 	}, nil
 }
-
 
 func (c *HTTPClient) chatOpenAICompatibleStream(ctx context.Context, messages []Message, opts Options, handler StreamHandler) (Response, error) {
 	payload := map[string]any{"model": c.modelID, "messages": messages, "stream": true}

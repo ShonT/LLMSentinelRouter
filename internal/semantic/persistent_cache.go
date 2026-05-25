@@ -68,6 +68,7 @@ func (c *PersistentCache) ConfidentRoute(prompt string, contextData any) (string
 }
 
 func (c *PersistentCache) Record(prompt string, contextData any, modelUsed, route string, latencyMS float64, judgeInvoked bool, cost float64, tokens int) {
+	_ = c.ensureLoaded(context.Background())
 	c.inner.Record(prompt, contextData, modelUsed, route, latencyMS, judgeInvoked, cost, tokens)
 	stats, ok := c.inner.Lookup(prompt, contextData)
 	if !ok || stats == nil {
@@ -85,6 +86,16 @@ func (c *PersistentCache) Record(prompt string, contextData any, modelUsed, rout
 		LastModel:        sql.NullString{String: stats.LastModel, Valid: stats.LastModel != ""},
 		LastCalledAt:     stats.LastCalledAt,
 		FirstSeenAt:      stats.FirstSeenAt,
+	})
+	_ = c.store.InsertSemanticCacheEntry(context.Background(), storage.SemanticCacheEntry{
+		SemanticHash:  stats.SemanticHash,
+		ContextHash:   HashPayload("", contextData),
+		PromptPreview: truncate(prompt, 500),
+		LatencyMS:     latencyMS,
+		JudgeInvoked:  judgeInvoked,
+		ModelUsed:     modelUsed,
+		Cost:          cost,
+		TotalTokens:   tokens,
 	})
 }
 
@@ -106,4 +117,11 @@ func nullStringValue(value sql.NullString) string {
 		return value.String
 	}
 	return ""
+}
+
+func truncate(value string, maxLen int) string {
+	if len(value) <= maxLen {
+		return value
+	}
+	return value[:maxLen]
 }

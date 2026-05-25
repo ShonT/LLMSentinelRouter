@@ -273,13 +273,26 @@ func TestDashboardAndAdminConfigFlows(t *testing.T) {
 }
 
 func TestDashboardResetAllCostsClearsRuntimeTotals(t *testing.T) {
+	fakeProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"content": "weak response"}}},
+			"usage":   map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+		})
+	}))
+	defer fakeProvider.Close()
+	t.Setenv("DEEPSEEK_BASE_URL", fakeProvider.URL)
+
 	app := newTestServer(t)
-	app.router.RuntimeFor("weak-deepseek", app.configManager.Current().Models["weak-deepseek"])
-	req := httptest.NewRequest(http.MethodPost, "/api/dashboard/model/weak-deepseek/reset-cost", nil)
+	body := `{"messages":[{"role":"user","content":"hello"}],"session_id":"cost-reset","use_judge":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	rr := httptest.NewRecorder()
 	app.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("reset model status = %d", rr.Code)
+		t.Fatalf("chat status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	runtime := app.router.RuntimeFor("weak-deepseek", app.configManager.Current().Models["weak-deepseek"])
+	if runtime.TotalCostSession <= 0 {
+		t.Fatalf("runtime cost was not recorded before reset: %g", runtime.TotalCostSession)
 	}
 	req = httptest.NewRequest(http.MethodPost, "/api/dashboard/reset-all-costs", nil)
 	rr = httptest.NewRecorder()
@@ -287,20 +300,43 @@ func TestDashboardResetAllCostsClearsRuntimeTotals(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("reset all status = %d body=%s", rr.Code, rr.Body.String())
 	}
-	runtime := app.router.RuntimeFor("weak-deepseek", app.configManager.Current().Models["weak-deepseek"])
+	runtime = app.router.RuntimeFor("weak-deepseek", app.configManager.Current().Models["weak-deepseek"])
 	if runtime.TotalCostSession != 0 {
 		t.Fatalf("total cost = %g, want 0", runtime.TotalCostSession)
 	}
 }
 
 func TestChatStreamingIsSupported(t *testing.T) {
+	fakeProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode provider request: %v", err)
+		}
+		if payload["stream"] != true {
+			t.Fatalf("provider stream = %v, want true", payload["stream"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer fakeProvider.Close()
+	t.Setenv("DEEPSEEK_BASE_URL", fakeProvider.URL)
+
 	app := newTestServer(t)
 	body := `{"messages":[{"role":"user","content":"hello"}],"stream":true,"use_judge":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	rr := httptest.NewRecorder()
 	app.Handler().ServeHTTP(rr, req)
-	if rr.Code == http.StatusBadRequest && strings.Contains(rr.Body.String(), "not supported") {
-		t.Fatalf("streaming should be supported, got status = %d body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("streaming status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if contentType := rr.Header().Get("Content-Type"); !strings.Contains(contentType, "text/event-stream") {
+		t.Fatalf("content-type = %q, want text/event-stream", contentType)
+	}
+	bodyText := rr.Body.String()
+	if !strings.Contains(bodyText, "hel") || !strings.Contains(bodyText, "lo") || !strings.Contains(bodyText, "data: [DONE]") {
+		t.Fatalf("unexpected stream body: %s", bodyText)
 	}
 }
 
@@ -315,6 +351,109 @@ func TestChatBudgetExceededUses402(t *testing.T) {
 	if rr.Code != http.StatusPaymentRequired {
 		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
 	}
+}
+
+func TestBudgetReservationSettlesToActualCost(t *testing.T) {
+	fakeProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"content": "weak response"}}},
+			"usage":   map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+		})
+	}))
+	defer fakeProvider.Close()
+	t.Setenv("DEEPSEEK_BASE_URL", fakeProvider.URL)
+
+	app := newTestServer(t)
+	body := `{"messages":[{"role":"user","content":"hello"}],"session_id":"budget-settle","use_judge":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("chat status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	session, err := app.store.GetSessionRequired(context.Background(), "budget-settle")
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if session.CurrentCost <= 0 || session.CurrentCost >= 0.01 {
+		t.Fatalf("session current cost = %g, want actual provider cost without reserved budget", session.CurrentCost)
+	}
+}
+
+func TestRuntimePolicyAndSessionDefaultsPersistAcrossServerRestart(t *testing.T) {
+	app := newTestServer(t)
+	baseSettings := app.settings
+
+	req := httptest.NewRequest(http.MethodPost, "/api/dashboard/session-defaults", strings.NewReader(`{"default_tier":"premium","default_use_judge":true,"session_id_strategy":"default"}`))
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("session defaults update status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	policyBody := `{"budget_control":{"max_cost_per_session":12.5,"escalation_rate_limit":0.10,"rolling_window_size":5},"judge":{"mode":"never","complexity_threshold":0.8},"semantic_cache":{"enabled":false,"min_samples":2,"confidence_threshold":0.9,"ttl_seconds":120},"cycle_detection":{"enabled":false,"window_size":7,"simhash_distance_threshold":2}}`
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/policy", strings.NewReader(policyBody))
+	rr = httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("policy update status = %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	restarted := New(baseSettings, app.configManager, app.store, metrics.NewCollector(filepath.Join(t.TempDir(), "metrics.jsonl")))
+	assertGET(t, restarted, "/api/dashboard/session-defaults", http.StatusOK, func(payload map[string]any) {
+		data := payload["data"].(map[string]any)
+		if data["default_tier"] != "premium" || data["default_use_judge"] != false {
+			t.Fatalf("persisted session defaults = %+v", data)
+		}
+	})
+	assertGET(t, restarted, "/api/admin/policy", http.StatusOK, func(payload map[string]any) {
+		data := payload["data"].(map[string]any)
+		budget := data["budget_control"].(map[string]any)
+		if budget["max_cost_per_session"].(float64) != 12.5 {
+			t.Fatalf("persisted budget policy = %+v", budget)
+		}
+		judge := data["judge"].(map[string]any)
+		if judge["mode"] != "never" {
+			t.Fatalf("persisted judge policy = %+v", judge)
+		}
+	})
+}
+
+func TestSemanticCachePersistsAcrossRouterRestart(t *testing.T) {
+	fakeProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"content": "weak response"}}},
+			"usage":   map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+		})
+	}))
+	defer fakeProvider.Close()
+	t.Setenv("DEEPSEEK_BASE_URL", fakeProvider.URL)
+
+	app := newTestServer(t)
+	app.settings.SemanticCacheMinSamples = 1
+	app.settings.SemanticCacheConfidence = 0.5
+	app.router.UpdatePolicy(app.settings)
+	body := `{"messages":[{"role":"user","content":"same prompt"}],"session_id":"semantic-1","use_judge":false}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("first chat status = %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	restarted := New(app.settings, app.configManager, app.store, metrics.NewCollector(filepath.Join(t.TempDir(), "metrics.jsonl")))
+	body = `{"messages":[{"role":"user","content":"same prompt"}],"session_id":"semantic-2"}`
+	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rr = httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("second chat status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	assertGET(t, restarted, "/api/dashboard/metrics", http.StatusOK, func(payload map[string]any) {
+		breakdown := payload["judge_breakdown"].(map[string]any)
+		if breakdown["semantic_cache"].(float64) != 1 {
+			t.Fatalf("judge breakdown = %+v, want semantic_cache skip from persisted cache", breakdown)
+		}
+	})
 }
 
 func TestChatRejectsInvalidRequests(t *testing.T) {

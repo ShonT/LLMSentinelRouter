@@ -21,6 +21,7 @@ type DashboardAggregate struct {
 	LatencySeries       map[string]any   `json:"latency_series"`
 	JudgeSuccessRate    float64          `json:"judge_success_rate"`
 	JudgeSkipRate       float64          `json:"judge_skip_rate"`
+	JudgeSkipCount      int              `json:"judge_skip_count"`
 	JudgeCallCount      int              `json:"judge_call_count"`
 	JudgeFallbackCount  int              `json:"judge_fallback_count"`
 	JudgeBreakdown      map[string]int   `json:"judge_breakdown"`
@@ -105,6 +106,7 @@ func (c *Collector) DashboardAggregate(limit int) DashboardAggregate {
 	out.WeakModelLatency = aggregateLatency(weakValues)
 	out.StrongModelLatency = aggregateLatency(strongValues)
 	out.JudgeCallCount = judgeCalls
+	out.JudgeSkipCount = judgeSkips
 	out.JudgeFallbackCount = judgeFallbacks
 	if judgeCalls+judgeSkips > 0 {
 		out.JudgeSkipRate = float64(judgeSkips) / float64(judgeCalls+judgeSkips)

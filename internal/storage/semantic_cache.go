@@ -20,6 +20,21 @@ type SemanticCacheStats struct {
 	FirstSeenAt      time.Time
 }
 
+type SemanticCacheEntry struct {
+	SemanticHash    string
+	ContextHash     string
+	PromptPreview   string
+	ResponsePreview string
+	LatencyMS       float64
+	JudgeInvoked    bool
+	JudgeLatencyMS  sql.NullFloat64
+	ModelUsed       string
+	ComplexityScore sql.NullFloat64
+	ImpactScope     sql.NullString
+	Cost            float64
+	TotalTokens     int
+}
+
 func (s *Store) LoadSemanticCacheStats(ctx context.Context) (map[string]*SemanticCacheStats, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT semantic_hash, total_calls, weak_calls, strong_calls,
 		judge_invocations, total_latency_ms, total_cost, total_tokens, last_model, last_called_at, first_seen_at
@@ -59,6 +74,22 @@ func (s *Store) UpsertSemanticCacheStats(ctx context.Context, st SemanticCacheSt
 			last_called_at = excluded.last_called_at`,
 		st.SemanticHash, st.TotalCalls, st.WeakCalls, st.StrongCalls, st.JudgeInvocations,
 		st.TotalLatencyMS, st.TotalCost, st.TotalTokens, st.LastModel, st.LastCalledAt, st.FirstSeenAt,
+	)
+	return err
+}
+
+func (s *Store) InsertSemanticCacheEntry(ctx context.Context, entry SemanticCacheEntry) error {
+	judgeInvoked := 0
+	if entry.JudgeInvoked {
+		judgeInvoked = 1
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO semantic_cache_entries
+		(semantic_hash, context_hash, prompt_preview, response_preview, latency_ms, judge_invoked,
+		 judge_latency_ms, model_used, complexity_score, impact_scope, cost, total_tokens, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		entry.SemanticHash, entry.ContextHash, entry.PromptPreview, entry.ResponsePreview, entry.LatencyMS,
+		judgeInvoked, entry.JudgeLatencyMS, entry.ModelUsed, entry.ComplexityScore, entry.ImpactScope,
+		entry.Cost, entry.TotalTokens, time.Now().UTC(),
 	)
 	return err
 }
