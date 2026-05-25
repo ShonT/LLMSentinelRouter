@@ -1209,7 +1209,7 @@
             function renderApiKeys(keys) {
                 const container = document.getElementById('apiKeysContainer');
                 apiKeysCache = keys || {};
-                apiKeysDraft = { ...apiKeysCache };
+                apiKeysDraft = {};
                 apiKeysDirty = false;
                 const rows = Object.entries(apiKeysCache).map(([key, value]) => {
                     if (liveEditEnabled) {
@@ -1218,7 +1218,7 @@
                             <div class="api-key-row">
                                 <span class="api-key-label">${key}</span>
                                 <input class="api-key-input" type="password" data-key-id="${key}"
-                                    value="${escapeAttribute(value)}" oninput="handleKeyInput(this)">
+                                    value="" placeholder="${escapeAttribute(value)}" autocomplete="off" oninput="handleKeyInput(this)">
                                 <button class="btn-reveal" onclick="toggleKeyVisibility(this)">Show</button>
                                 <button class="btn-test-key" data-key-id="${key}" data-provider="${provider}" onclick="testKey(this)">
                                     <span class="btn-label">Test</span>
@@ -1249,7 +1249,7 @@
             function handleKeyInput(input) {
                 const keyId = input.getAttribute('data-key-id');
                 apiKeysDraft[keyId] = input.value;
-                apiKeysDirty = true;
+                apiKeysDirty = Object.values(apiKeysDraft).some(value => String(value || '').trim() !== '');
                 updateKeysToolbar();
             }
 
@@ -1305,7 +1305,7 @@
                     return;
                 }
                 if (!keyValue) {
-                    setKeyTestState(keyId, 'error', 'Key is empty');
+                    setKeyTestState(keyId, 'error', 'Enter a replacement key');
                     return;
                 }
                 const token = getAdminToken();
@@ -1504,7 +1504,7 @@
                 if (!liveEditEnabled) return;
                 const updates = {};
                 Object.entries(apiKeysDraft).forEach(([keyId, value]) => {
-                    if (apiKeysCache[keyId] !== value) {
+                    if (String(value || '').trim() !== '') {
                         updates[keyId] = { value };
                     }
                 });
@@ -1535,10 +1535,11 @@
                         setKeysStatus(message, 'status-error');
                         return;
                     }
+                    const maskedUpdates = payload.masked_updates || {};
                     Object.entries(updates).forEach(([keyId, entry]) => {
-                        apiKeysCache[keyId] = entry.value;
+                        apiKeysCache[keyId] = maskedUpdates[keyId] || maskApiKey(entry.value);
                     });
-                    apiKeysDraft = { ...apiKeysCache };
+                    apiKeysDraft = {};
                     apiKeysDirty = false;
                     renderApiKeys(apiKeysCache);
                     setKeysStatus('Keys saved', 'status-success');

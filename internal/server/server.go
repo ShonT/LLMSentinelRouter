@@ -520,7 +520,7 @@ func (s *Server) dashboardConfiguration(w http.ResponseWriter, r *http.Request) 
 	apiKeys := map[string]string{}
 	apiKeyTypes := map[string]string{}
 	for id, key := range cfg.Keys {
-		apiKeys[id] = key.Value
+		apiKeys[id] = maskKey(key.Value)
 		apiKeyTypes[id] = string(key.Type)
 	}
 	models := make([]map[string]any, 0, len(cfg.Models))

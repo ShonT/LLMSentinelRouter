@@ -261,8 +261,12 @@ func TestDashboardAndAdminConfigFlows(t *testing.T) {
 	}
 
 	assertGET(t, app, "/api/dashboard/configuration", http.StatusOK, func(payload map[string]any) {
-		if _, ok := payload["api_keys"].(map[string]any)["deepseek_key"]; !ok {
+		keys := payload["api_keys"].(map[string]any)
+		if _, ok := keys["deepseek_key"]; !ok {
 			t.Fatalf("missing deepseek key in configuration: %+v", payload)
+		}
+		if keys["deepseek_key"] == "${DEEPSEEK_API_KEY}" {
+			t.Fatalf("configuration exposed raw API key value")
 		}
 	})
 	assertGET(t, app, "/api/dashboard/full-config", http.StatusOK, func(payload map[string]any) {
@@ -304,6 +308,19 @@ func TestDashboardResetAllCostsClearsRuntimeTotals(t *testing.T) {
 	if runtime.TotalCostSession != 0 {
 		t.Fatalf("total cost = %g, want 0", runtime.TotalCostSession)
 	}
+}
+
+func TestDashboardConfigurationMasksAPIKeys(t *testing.T) {
+	app := newTestServer(t)
+	assertGET(t, app, "/api/dashboard/configuration", http.StatusOK, func(payload map[string]any) {
+		keys := payload["api_keys"].(map[string]any)
+		if keys["deepseek_key"] == "test-key-123" {
+			t.Fatalf("configuration exposed raw API key")
+		}
+		if keys["deepseek_key"] != "test...-123" {
+			t.Fatalf("masked key = %q, want test...-123", keys["deepseek_key"])
+		}
+	})
 }
 
 func TestChatStreamingIsSupported(t *testing.T) {
@@ -454,6 +471,32 @@ func TestSemanticCachePersistsAcrossRouterRestart(t *testing.T) {
 			t.Fatalf("judge breakdown = %+v, want semantic_cache skip from persisted cache", breakdown)
 		}
 	})
+}
+
+func TestChatUsesLastUserMessageAndCoercesContent(t *testing.T) {
+	fakeProvider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("unexpected provider path %s", r.URL.Path)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"content": []map[string]string{{"text": "strong response"}},
+			"usage":   map[string]int{"input_tokens": 10, "output_tokens": 5},
+		})
+	}))
+	defer fakeProvider.Close()
+	t.Setenv("ANTHROPIC_BASE_URL", fakeProvider.URL)
+
+	app := newTestServer(t)
+	body := `{"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"ok"},{"role":"user","content":{"task":"production security database migration distributed architecture optimize"}}],"session_id":"last-user","use_judge":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("chat status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("X-Sentinel-Model-Used"); got != "strong-anthropic" {
+		t.Fatalf("model header = %q, want strong-anthropic", got)
+	}
 }
 
 func TestChatRejectsInvalidRequests(t *testing.T) {

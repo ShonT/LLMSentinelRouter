@@ -7,12 +7,12 @@ import (
 
 // HealthTracker implements per-judge circuit breaking (failure threshold + cooldown).
 type HealthTracker struct {
-	mu                sync.RWMutex
-	failureThreshold  int
-	cooldown          time.Duration
-	failures          map[string]int
-	circuitOpenUntil  map[string]time.Time
-	lastFailure       map[string]time.Time
+	mu               sync.RWMutex
+	failureThreshold int
+	cooldown         time.Duration
+	failures         map[string]int
+	circuitOpenUntil map[string]time.Time
+	lastFailure      map[string]time.Time
 }
 
 func NewHealthTracker(failureThreshold, cooldownSeconds int) *HealthTracker {
