@@ -1,0 +1,12 @@
+.git
+.codex
+.env
+.env.*
+bin
+data
+logs
+*.db
+*.sqlite
+*.log
+coverage.out
+docker-compose.override.yml
