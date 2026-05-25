@@ -48,15 +48,25 @@ type Router struct {
 	budget        *budget.Manager
 	threshold     *threshold.Dynamic
 	cycles        *cycle.Registry
-	cache         *semantic.Cache
+	cache         semanticCache
 	limiter       *rate.Limiter
 	redactor      *redaction.Engine
 	metrics       *metrics.Collector
 	clientFactory provider.Factory
+	judgeRegistry *judge.Registry
 	mu            sync.RWMutex
 	modelStatus   map[string]string
 	modelStats    map[string]*ModelRuntime
 }
+
+type semanticCache interface {
+	ConfidentRoute(prompt string, contextData any) (string, float64, bool)
+	Record(prompt string, contextData any, modelUsed, route string, latencyMS float64, judgeInvoked bool, cost float64, tokens int)
+	Reset()
+}
+
+// ModelStreamHandler receives streaming chunks after the routed model is selected.
+type ModelStreamHandler func(modelID string, chunk provider.StreamChunk) error
 
 type ModelRuntime struct {
 	Status           string
@@ -68,6 +78,8 @@ type ModelRuntime struct {
 }
 
 func New(settings config.Settings, manager *config.Manager, store *storage.Store, collector *metrics.Collector) *Router {
+	health := judge.NewHealthTracker(settings.JudgeFailureThreshold, settings.JudgeCooldownSeconds)
+	factory := provider.Factory{}
 	return &Router{
 		settings:      settings,
 		configManager: manager,
@@ -75,16 +87,18 @@ func New(settings config.Settings, manager *config.Manager, store *storage.Store
 		budget:        budget.NewManager(store, settings.MaxCostPerSession),
 		threshold:     threshold.New(settings.TargetEscalationRate, settings.RollingWindowSize, settings.InitialThreshold),
 		cycles:        cycle.NewRegistry(1000, settings.CycleDetectionThreshold, settings.CycleDetectionWindowSize),
-		cache:         semantic.NewCache(settings.SemanticCacheMinSamples, settings.SemanticCacheConfidence, settings.SemanticCacheTTLSeconds),
+		cache:         semantic.NewPersistentCache(store, settings.SemanticCacheMinSamples, settings.SemanticCacheConfidence, settings.SemanticCacheTTLSeconds),
 		limiter:       rate.New(0.95),
 		redactor:      redaction.New(settings.RedactionMode, settings.RedactionStrategy, settings.RedactionSalt, settings.RedactionCategories),
 		metrics:       collector,
+		clientFactory: factory,
+		judgeRegistry: judge.NewRegistry(nil, factory, health, settings.JudgeMaxAttempts),
 		modelStatus:   map[string]string{},
 		modelStats:    map[string]*ModelRuntime{},
 	}
 }
 
-func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt string, messages []provider.Message, useJudge *bool, opts provider.Options) (Result, error) {
+func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt string, messages []provider.Message, useJudge *bool, opts provider.Options, stream ModelStreamHandler) (Result, error) {
 	start := time.Now()
 	if sessionID == "" {
 		sessionID = NewID()
@@ -120,10 +134,12 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 		"route_decision": cacheRoute,
 	})
 	const estimatedWorstCaseCost = 5.0
+	reservedCost := 0.0
 	if r.settings.EnableBudgetKillSwitch {
 		if _, err := r.budget.RequireBudget(ctx, sessionID, estimatedWorstCaseCost); err != nil {
 			return Result{}, err
 		}
+		reservedCost = estimatedWorstCaseCost
 	}
 	detector := r.cycles.Get(sessionID)
 	cycleDetected := false
@@ -132,17 +148,20 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 	}
 	judgeResult := judge.Result{ComplexityScore: 0.0, ImpactScope: "LOW", Reasoning: "Judge deferred - conditional mode (will call if weak model is slow)"}
 	judgeInvoked := false
+	judgeSkipReason := "conditional_fast_path"
 	if cacheOK {
+		judgeSkipReason = "semantic_cache"
 		if cacheRoute == "strong" {
 			judgeResult = judge.Result{ComplexityScore: 0.95, ImpactScope: "HIGH", Reasoning: fmt.Sprintf("Judge skipped - cache confident (conf=%.2f) recommends strong model", cacheConfidence)}
 		} else {
 			judgeResult = judge.Result{ComplexityScore: 0.0, ImpactScope: "LOW", Reasoning: fmt.Sprintf("Judge skipped - cache confident (conf=%.2f) recommends weak model", cacheConfidence)}
 		}
 	} else if useJudge != nil && !*useJudge {
+		judgeSkipReason = "request_disabled"
 		judgeResult = judge.Result{ComplexityScore: 0.0, ImpactScope: "LOW", Reasoning: "Judge skipped by request (use_judge=false)"}
 	} else if useJudge != nil && *useJudge {
 		judgeInvoked = true
-		judgeResult = judge.New(cfg, r.clientFactory).Evaluate(ctx, prompt)
+		judgeResult = r.evaluateJudge(ctx, cfg, prompt)
 	}
 	currentThreshold := r.threshold.Threshold()
 	strictMode := r.settings.EnableDynamicThreshold && r.threshold.IsStrictMode()
@@ -160,11 +179,11 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 	if conditionalWeakCall {
 		callCtx, cancelCall = context.WithTimeout(ctx, r.conditionalJudgeTimeout())
 	}
-	response, modelUsed, modelLatency, err := r.callCandidates(callCtx, cfg, priorityGroup, prompt, redactedMessages, opts)
+	response, modelUsed, modelLatency, err := r.callCandidates(callCtx, cfg, priorityGroup, prompt, redactedMessages, opts, stream)
 	cancelCall()
 	if err != nil && conditionalWeakCall && contextTimedOut(err, callCtx) {
 		judgeInvoked = true
-		judgeResult = judge.New(cfg, r.clientFactory).Evaluate(ctx, prompt)
+		judgeResult = r.evaluateJudge(ctx, cfg, prompt)
 		currentThreshold = r.threshold.Threshold()
 		strictMode = r.settings.EnableDynamicThreshold && r.threshold.IsStrictMode()
 		routeDecision = decideRoute(judgeResult.ComplexityScore, judgeResult.ImpactScope, currentThreshold, strictMode, cycleDetected)
@@ -173,7 +192,7 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 			priorityGroup = "strong_tier"
 			resultTier = "strong"
 		}
-		response, modelUsed, modelLatency, err = r.callCandidates(ctx, cfg, priorityGroup, prompt, redactedMessages, opts)
+		response, modelUsed, modelLatency, err = r.callCandidates(ctx, cfg, priorityGroup, prompt, redactedMessages, opts, stream)
 	}
 	if err != nil {
 		detector.ClearLastResponse()
@@ -181,19 +200,42 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 	}
 	if response.Content != "" {
 		detector.Add(prompt, response.Content)
+		if err := r.store.InsertCycleDetection(ctx, storage.CycleDetectionRecord{
+			SessionID:    sessionID,
+			PromptHash:   shortHash(prompt),
+			ResponseHash: shortHash(response.Content),
+		}); err != nil {
+			r.metrics.Record("cycle_detection_write_error", map[string]any{"session_id": sessionID, "error": err.Error()})
+		}
 	}
 	finalCost, costSource, computedCost := finalCost(response)
-	if err := r.budget.AddCost(ctx, sessionID, finalCost); err != nil {
-		return Result{}, err
+	if r.settings.EnableBudgetKillSwitch {
+		if err := r.budget.SettleCost(ctx, sessionID, reservedCost, finalCost); err != nil {
+			return Result{}, err
+		}
+	} else {
+		if err := r.budget.AddCost(ctx, sessionID, finalCost); err != nil {
+			return Result{}, err
+		}
 	}
 	session, err := r.store.GetSessionRequired(ctx, sessionID)
 	if err != nil {
 		return Result{}, err
 	}
 	if r.settings.EnableDynamicThreshold {
+		beforeThreshold := r.threshold.Threshold()
 		r.threshold.AddDecision(routeDecision == "strong")
-		if _, changed := r.threshold.Adjust(); changed {
+		if afterThreshold, changed := r.threshold.Adjust(); changed {
 			r.metrics.Record("threshold_adjusted", map[string]any{"session_id": sessionID, "escalation_rate": r.threshold.Rate()})
+			if err := r.store.InsertEscalationLog(ctx, storage.EscalationLogRecord{
+				SessionID:       sessionID,
+				EscalationRate:  r.threshold.Rate(),
+				ThresholdBefore: beforeThreshold,
+				ThresholdAfter:  afterThreshold,
+				Reason:          "dynamic_threshold_adjusted",
+			}); err != nil {
+				r.metrics.Record("escalation_log_write_error", map[string]any{"session_id": sessionID, "error": err.Error()})
+			}
 		}
 	}
 	logPrompt := prompt
@@ -206,6 +248,17 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 	}
 	requestID := NewID()
 	requestLatency := float64(time.Since(start).Milliseconds())
+	if judgeInvoked {
+		r.metrics.Record("judge_latency", map[string]any{"session_id": sessionID, "judge_id": judgeResult.JudgeID, "latency_ms": judgeResult.LatencyMS, "impact_scope": judgeResult.ImpactScope})
+	} else {
+		r.metrics.Record("judge_skip", map[string]any{"session_id": sessionID, "reason": judgeSkipReason})
+	}
+	modelLatencyType := "weak_model_latency"
+	if resultTier == "strong" {
+		modelLatencyType = "strong_model_latency"
+	}
+	r.metrics.Record(modelLatencyType, map[string]any{"session_id": sessionID, "model_id": modelUsed, "latency_ms": modelLatency})
+	r.metrics.Record("overall_request_latency", map[string]any{"session_id": sessionID, "latency_ms": requestLatency})
 	if err := r.store.InsertRoutingDecision(ctx, storage.RoutingDecision{
 		SessionID:        sessionID,
 		RequestID:        requestID,
@@ -226,6 +279,18 @@ func (r *Router) Route(ctx context.Context, sessionID, clientIP, tier, prompt st
 		JudgeLatencyMS:   nullableFloat(&judgeResult.LatencyMS),
 	}); err != nil {
 		return Result{}, err
+	}
+	if routeDecision == "strong" {
+		if err := r.store.InsertEscalationTrace(ctx, storage.EscalationTraceRecord{
+			SessionID:       sessionID,
+			RequestID:       requestID,
+			ModelUsed:       modelUsed,
+			ComplexityScore: judgeResult.ComplexityScore,
+			ImpactScope:     nullableString(judgeResult.ImpactScope),
+			Reason:          nullableString(decisionReason),
+		}); err != nil {
+			r.metrics.Record("escalation_trace_write_error", map[string]any{"session_id": sessionID, "request_id": requestID, "error": err.Error()})
+		}
 	}
 	if semanticEnabled && !cycleDetected {
 		r.cache.Record(logPrompt, logMessages, modelUsed, routeDecision, requestLatency, judgeInvoked, finalCost, response.Usage.TotalTokens)
@@ -273,7 +338,7 @@ func (r *Router) UpdatePolicy(settings config.Settings) {
 	r.budget.SetMaxCostPerSession(settings.MaxCostPerSession)
 	r.threshold = threshold.New(settings.TargetEscalationRate, settings.RollingWindowSize, settings.InitialThreshold)
 	r.cycles = cycle.NewRegistry(1000, settings.CycleDetectionThreshold, settings.CycleDetectionWindowSize)
-	r.cache = semantic.NewCache(settings.SemanticCacheMinSamples, settings.SemanticCacheConfidence, settings.SemanticCacheTTLSeconds)
+	r.cache = semantic.NewPersistentCache(r.store, settings.SemanticCacheMinSamples, settings.SemanticCacheConfidence, settings.SemanticCacheTTLSeconds)
 	r.redactor = redaction.New(settings.RedactionMode, settings.RedactionStrategy, settings.RedactionSalt, settings.RedactionCategories)
 }
 
@@ -315,6 +380,28 @@ func (r *Router) ResetModelCost(modelID string) {
 	stats.LastUpdated = &now
 }
 
+func (r *Router) ResetAllModelCosts(cfg *config.SentinelConfig) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now().UTC()
+	if cfg != nil {
+		for modelID := range cfg.Models {
+			stats := r.modelStats[modelID]
+			if stats == nil {
+				stats = &ModelRuntime{Status: "active"}
+				r.modelStats[modelID] = stats
+			}
+			stats.TotalCostSession = 0
+			stats.LastUpdated = &now
+		}
+		return
+	}
+	for _, stats := range r.modelStats {
+		stats.TotalCostSession = 0
+		stats.LastUpdated = &now
+	}
+}
+
 func (r *Router) RuntimeFor(modelID string, model config.ModelDefinition) ModelRuntime {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -333,7 +420,19 @@ func (r *Router) RuntimeFor(modelID string, model config.ModelDefinition) ModelR
 	return stats
 }
 
-func (r *Router) callCandidates(ctx context.Context, cfg *config.SentinelConfig, priorityGroup, prompt string, messages []provider.Message, opts provider.Options) (provider.Response, string, float64, error) {
+func (r *Router) evaluateJudge(ctx context.Context, cfg *config.SentinelConfig, prompt string) judge.Result {
+	return r.judgeRegistry.Evaluate(ctx, cfg, prompt)
+}
+
+func (r *Router) JudgeRegistryStatus() []map[string]any {
+	cfg := r.configManager.Current()
+	if cfg == nil {
+		return nil
+	}
+	return r.judgeRegistry.RegistryStatus(cfg)
+}
+
+func (r *Router) callCandidates(ctx context.Context, cfg *config.SentinelConfig, priorityGroup, prompt string, messages []provider.Message, opts provider.Options, stream ModelStreamHandler) (provider.Response, string, float64, error) {
 	candidates := r.candidates(cfg, priorityGroup)
 	if len(candidates) == 0 {
 		return provider.Response{}, "", 0, fmt.Errorf("no active models in priority group %s", priorityGroup)
@@ -350,7 +449,16 @@ func (r *Router) callCandidates(ctx context.Context, cfg *config.SentinelConfig,
 		for _, key := range orderedKeys(cfg, model) {
 			client := r.clientFactory.NewClient(model.Provider, key, model)
 			start := time.Now()
-			response, err := client.ChatCompletion(ctx, messages, opts)
+			var response provider.Response
+			var err error
+			if opts.Stream && stream != nil {
+				handler := func(chunk provider.StreamChunk) error {
+					return stream(modelID, chunk)
+				}
+				response, err = client.ChatCompletionStream(ctx, messages, opts, handler)
+			} else {
+				response, err = client.ChatCompletion(ctx, messages, opts)
+			}
 			_ = client.Close()
 			latency := float64(time.Since(start).Milliseconds())
 			if err == nil {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
@@ -44,18 +45,40 @@ type SessionDefaults struct {
 	SessionIDStrategy string `json:"session_id_strategy"`
 }
 
+const (
+	sessionDefaultsStateKey = "session_defaults"
+	adminPolicyStateKey     = "admin_policy"
+)
+
+type persistedPolicy struct {
+	MaxCostPerSession        float64 `json:"max_cost_per_session"`
+	EscalationRateLimit      float64 `json:"escalation_rate_limit"`
+	TargetEscalationRate     float64 `json:"target_escalation_rate"`
+	RollingWindowSize        int     `json:"rolling_window_size"`
+	ComplexityThreshold      float64 `json:"complexity_threshold"`
+	SemanticCacheEnabled     bool    `json:"semantic_cache_enabled"`
+	SemanticCacheMinSamples  int     `json:"semantic_cache_min_samples"`
+	SemanticCacheConfidence  float64 `json:"semantic_cache_confidence"`
+	SemanticCacheTTLSeconds  int     `json:"semantic_cache_ttl_seconds"`
+	EnableCycleDetection     bool    `json:"enable_cycle_detection"`
+	CycleDetectionWindowSize int     `json:"cycle_detection_window_size"`
+	CycleDetectionThreshold  int     `json:"cycle_detection_threshold"`
+}
+
 func New(settings config.Settings, manager *config.Manager, store *storage.Store, collector *metrics.Collector) *Server {
+	defaults := SessionDefaults{
+		DefaultSessionID:  "default-uuid-001",
+		DefaultTier:       "free",
+		SessionIDStrategy: "uuid",
+	}
+	settings, defaults = loadPersistedRuntimeState(store, settings, defaults)
 	return &Server{
-		settings:      settings,
-		configManager: manager,
-		store:         store,
-		router:        router.New(settings, manager, store, collector),
-		metrics:       collector,
-		sessionDefaults: SessionDefaults{
-			DefaultSessionID:  "default-uuid-001",
-			DefaultTier:       "free",
-			SessionIDStrategy: "uuid",
-		},
+		settings:        settings,
+		configManager:   manager,
+		store:           store,
+		router:          router.New(settings, manager, store, collector),
+		metrics:         collector,
+		sessionDefaults: defaults,
 	}
 }
 
@@ -266,16 +289,21 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if useJudge == nil {
 		useJudge = defaults.DefaultUseJudge
 	}
-	result, err := s.router.Route(r.Context(), sessionID, clientIP(r), tier, prompt, req.Messages, useJudge, provider.Options{
+	opts := provider.Options{
 		Temperature: req.Temperature,
 		MaxTokens:   req.MaxTokens,
 		Stream:      req.Stream,
-	})
+	}
+	if req.Stream {
+		s.chatCompletionsStream(w, r, sessionID, tier, prompt, req.Messages, useJudge, opts)
+		return
+	}
+	result, err := s.router.Route(r.Context(), sessionID, clientIP(r), tier, prompt, req.Messages, useJudge, opts, nil)
 	if err != nil {
 		status := http.StatusInternalServerError
 		errorType := "internal_error"
 		if strings.Contains(strings.ToLower(err.Error()), "budget exceeded") {
-			status = http.StatusTooManyRequests
+			status = http.StatusPaymentRequired
 			errorType = "budget_exceeded"
 		}
 		writeError(w, status, errorType, err.Error())
@@ -310,6 +338,68 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
+func (s *Server) chatCompletionsStream(w http.ResponseWriter, r *http.Request, sessionID, tier, prompt string, messages []provider.Message, useJudge *bool, opts provider.Options) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Streaming not supported by server.")
+		return
+	}
+	responseID := "chatcmpl-" + router.NewID()
+	created := streamCreated()
+	started := false
+	startStream := func() {
+		if started {
+			return
+		}
+		setSSEHeaders(w)
+		w.WriteHeader(http.StatusOK)
+		started = true
+	}
+
+	var streamModel string
+	result, err := s.router.Route(r.Context(), sessionID, clientIP(r), tier, prompt, messages, useJudge, opts, func(modelID string, chunk provider.StreamChunk) error {
+		if modelID != "" {
+			streamModel = modelID
+		}
+		if chunk.Content != "" {
+			startStream()
+			return writeSSEChunk(w, flusher, responseID, streamModel, created, chunk.Content)
+		}
+		if chunk.Done && chunk.Usage != nil {
+			startStream()
+			return writeSSEUsage(w, flusher, responseID, streamModel, created, *chunk.Usage)
+		}
+		return nil
+	})
+	if err != nil {
+		if !started {
+			status := http.StatusInternalServerError
+			errorType := "internal_error"
+			if strings.Contains(strings.ToLower(err.Error()), "budget exceeded") {
+				status = http.StatusPaymentRequired
+				errorType = "budget_exceeded"
+			}
+			writeError(w, status, errorType, err.Error())
+			return
+		}
+		log.Printf("stream route error after headers sent: %v", err)
+		return
+	}
+	if !started {
+		startStream()
+	}
+	if streamModel == "" {
+		streamModel = result.ModelUsed
+	}
+	w.Header().Set("X-Sentinel-Model-Used", result.ModelUsed)
+	w.Header().Set("X-Sentinel-Cost", fmt.Sprintf("%g", result.Cost))
+	w.Header().Set("X-Sentinel-Session-Cost", fmt.Sprintf("%g", result.SessionCost))
+	w.Header().Set("X-Sentinel-Complexity-Score", fmt.Sprintf("%g", result.ComplexityScore))
+	w.Header().Set("X-Sentinel-Cycle-Detected", fmt.Sprintf("%t", result.CycleDetected))
+	w.Header().Set("X-Sentinel-Session-ID", sessionID)
+	_ = writeSSEDone(w, flusher)
+}
+
 func (s *Server) getSessionDefaults(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": s.currentDefaults()})
 }
@@ -321,7 +411,6 @@ func (s *Server) updateSessionDefaults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if raw, ok := updates["default_session_id"]; ok {
 		_ = json.Unmarshal(raw, &s.sessionDefaults.DefaultSessionID)
 	}
@@ -341,14 +430,25 @@ func (s *Server) updateSessionDefaults(w http.ResponseWriter, r *http.Request) {
 	if raw, ok := updates["session_id_strategy"]; ok {
 		_ = json.Unmarshal(raw, &s.sessionDefaults.SessionIDStrategy)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Session defaults updated successfully", "data": s.sessionDefaults})
+	defaults := s.sessionDefaults
+	s.mu.Unlock()
+	if err := s.store.SaveState(r.Context(), sessionDefaultsStateKey, defaults); err != nil {
+		writeError(w, http.StatusInternalServerError, "state_persist_error", "Failed to persist session defaults.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Session defaults updated successfully", "data": defaults})
 }
 
 func (s *Server) regenerateSessionID(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.sessionDefaults.DefaultSessionID = router.NewID()
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Session ID regenerated successfully", "data": map[string]string{"default_session_id": s.sessionDefaults.DefaultSessionID}})
+	defaults := s.sessionDefaults
+	s.mu.Unlock()
+	if err := s.store.SaveState(r.Context(), sessionDefaultsStateKey, defaults); err != nil {
+		writeError(w, http.StatusInternalServerError, "state_persist_error", "Failed to persist session defaults.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Session ID regenerated successfully", "data": map[string]string{"default_session_id": defaults.DefaultSessionID}})
 }
 
 func (s *Server) dashboardLive(w http.ResponseWriter, r *http.Request) {
@@ -397,6 +497,7 @@ func (s *Server) dashboardModelStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dashboardResetAllCosts(w http.ResponseWriter, r *http.Request) {
+	s.router.ResetAllModelCosts(s.configManager.Current())
 	writeJSON(w, http.StatusOK, map[string]any{"status": "success", "message": "All costs reset"})
 }
 
@@ -411,20 +512,7 @@ func (s *Server) dashboardStopAll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dashboardMetrics(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"total_fallbacks":       0,
-		"judge_latency":         map[string]any{},
-		"weak_model_latency":    map[string]any{},
-		"strong_model_latency":  map[string]any{},
-		"latency_series":        map[string]any{"labels": []string{}, "judge_latency": []float64{}, "weak_model_latency": []float64{}, "strong_model_latency": []float64{}, "overall_request_latency": []float64{}},
-		"judge_success_rate":    0,
-		"judge_skip_rate":       0,
-		"judge_call_count":      0,
-		"judge_fallback_count":  0,
-		"judge_breakdown":       map[string]any{},
-		"fallback_chain":        []any{},
-		"recent_metrics_sample": s.metrics.Recent(50),
-	})
+	writeJSON(w, http.StatusOK, s.metrics.DashboardAggregate(10000))
 }
 
 func (s *Server) dashboardConfiguration(w http.ResponseWriter, r *http.Request) {
@@ -432,7 +520,7 @@ func (s *Server) dashboardConfiguration(w http.ResponseWriter, r *http.Request) 
 	apiKeys := map[string]string{}
 	apiKeyTypes := map[string]string{}
 	for id, key := range cfg.Keys {
-		apiKeys[id] = key.Value
+		apiKeys[id] = maskKey(key.Value)
 		apiKeyTypes[id] = string(key.Type)
 	}
 	models := make([]map[string]any, 0, len(cfg.Models))
@@ -835,6 +923,12 @@ func (s *Server) updatePolicy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.router.UpdatePolicy(s.settings)
+	if err := s.store.SaveState(r.Context(), adminPolicyStateKey, s.persistedPolicy()); err != nil {
+		warnings = append(warnings, "admin policy changed but could not be persisted: "+err.Error())
+	}
+	if err := s.store.SaveState(r.Context(), sessionDefaultsStateKey, s.currentDefaults()); err != nil {
+		warnings = append(warnings, "session defaults changed but could not be persisted: "+err.Error())
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Admin policy updated successfully", "warnings": warnings, "data": updates})
 }
 
@@ -843,6 +937,13 @@ func (s *Server) getAdminState(w http.ResponseWriter, r *http.Request) {
 	weak := cfg.RoutingPolicy.WeakTier.Order
 	strong := cfg.RoutingPolicy.StrongTier.Order
 	summary, _ := s.store.MetricsSummary(r.Context(), strongModelSet(cfg))
+	dashboardMetrics := s.metrics.DashboardAggregate(10000)
+	cacheHits, cacheMisses, cacheClusters, _ := s.store.SemanticCacheSummary(r.Context())
+	cacheTotal := cacheHits + cacheMisses
+	cacheHitRate := 0.0
+	if cacheTotal > 0 {
+		cacheHitRate = float64(cacheHits) / float64(cacheTotal)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"data": map[string]any{
@@ -851,8 +952,15 @@ func (s *Server) getAdminState(w http.ResponseWriter, r *http.Request) {
 				"strong_models": strong,
 				"routing_order": append(append([]string{}, weak...), strong...),
 			},
-			"judge":          map[string]any{"invoked_count": 0, "skipped_count": 0, "skip_rate": 0, "success_rate": 0, "avg_latency_ms": 0},
-			"semantic_cache": map[string]any{"hit_count": 0, "miss_count": 0, "hit_rate": 0, "active_clusters": 0, "judge_skip_attribution": 0},
+			"judge": map[string]any{
+				"invoked_count":  dashboardMetrics.JudgeCallCount,
+				"skipped_count":  dashboardMetrics.JudgeSkipCount,
+				"skip_rate":      dashboardMetrics.JudgeSkipRate,
+				"success_rate":   dashboardMetrics.JudgeSuccessRate,
+				"avg_latency_ms": dashboardMetrics.JudgeLatency.AvgMS,
+				"registry":       s.router.JudgeRegistryStatus(),
+			},
+			"semantic_cache": map[string]any{"hit_count": cacheHits, "miss_count": cacheMisses, "hit_rate": cacheHitRate, "active_clusters": cacheClusters, "judge_skip_attribution": dashboardMetrics.JudgeBreakdown["semantic_cache"]},
 			"escalation":     map[string]any{"current_rate": summary.EscalationRate, "target_rate": s.settings.TargetEscalationRate, "is_strict_mode": summary.EscalationRate > s.settings.TargetEscalationRate, "effective_threshold": s.settings.InitialThreshold},
 		},
 	})
@@ -881,6 +989,70 @@ func (s *Server) currentDefaults() SessionDefaults {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sessionDefaults
+}
+
+func loadPersistedRuntimeState(store *storage.Store, settings config.Settings, defaults SessionDefaults) (config.Settings, SessionDefaults) {
+	if store == nil {
+		return settings, defaults
+	}
+	ctx := contextWithTimeout()
+	defer ctx.cancel()
+	var policy persistedPolicy
+	if ok, err := store.LoadState(ctx.context, adminPolicyStateKey, &policy); err == nil && ok {
+		settings = applyPersistedPolicy(settings, policy)
+	} else if err != nil {
+		log.Printf("failed to load persisted admin policy: %v", err)
+	}
+	var persistedDefaults SessionDefaults
+	if ok, err := store.LoadState(ctx.context, sessionDefaultsStateKey, &persistedDefaults); err == nil && ok {
+		defaults = persistedDefaults
+	} else if err != nil {
+		log.Printf("failed to load persisted session defaults: %v", err)
+	}
+	return settings, defaults
+}
+
+func applyPersistedPolicy(settings config.Settings, policy persistedPolicy) config.Settings {
+	settings.MaxCostPerSession = policy.MaxCostPerSession
+	settings.EscalationRateLimit = policy.EscalationRateLimit
+	settings.TargetEscalationRate = firstPositive(policy.TargetEscalationRate, policy.EscalationRateLimit)
+	settings.RollingWindowSize = policy.RollingWindowSize
+	settings.ComplexityThreshold = policy.ComplexityThreshold
+	settings.SemanticCacheEnabled = policy.SemanticCacheEnabled
+	settings.SemanticCacheMinSamples = policy.SemanticCacheMinSamples
+	settings.SemanticCacheConfidence = policy.SemanticCacheConfidence
+	settings.SemanticCacheTTLSeconds = policy.SemanticCacheTTLSeconds
+	settings.EnableCycleDetection = policy.EnableCycleDetection
+	settings.CycleDetectionWindowSize = policy.CycleDetectionWindowSize
+	settings.CycleDetectionThreshold = policy.CycleDetectionThreshold
+	return settings
+}
+
+func (s *Server) persistedPolicy() persistedPolicy {
+	return persistedPolicy{
+		MaxCostPerSession:        s.settings.MaxCostPerSession,
+		EscalationRateLimit:      s.settings.EscalationRateLimit,
+		TargetEscalationRate:     s.settings.TargetEscalationRate,
+		RollingWindowSize:        s.settings.RollingWindowSize,
+		ComplexityThreshold:      s.settings.ComplexityThreshold,
+		SemanticCacheEnabled:     s.settings.SemanticCacheEnabled,
+		SemanticCacheMinSamples:  s.settings.SemanticCacheMinSamples,
+		SemanticCacheConfidence:  s.settings.SemanticCacheConfidence,
+		SemanticCacheTTLSeconds:  s.settings.SemanticCacheTTLSeconds,
+		EnableCycleDetection:     s.settings.EnableCycleDetection,
+		CycleDetectionWindowSize: s.settings.CycleDetectionWindowSize,
+		CycleDetectionThreshold:  s.settings.CycleDetectionThreshold,
+	}
+}
+
+type timeoutContext struct {
+	context context.Context
+	cancel  func()
+}
+
+func contextWithTimeout() timeoutContext {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	return timeoutContext{context: ctx, cancel: cancel}
 }
 
 func (s *Server) authorized(r *http.Request) bool {
@@ -1085,6 +1257,15 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+func firstPositive(values ...float64) float64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func firstNonEmpty(values ...string) string {

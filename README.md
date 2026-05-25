@@ -136,6 +136,8 @@ Provider base URLs can be overridden for local testing with `DEEPSEEK_BASE_URL`,
 - `POST /api/admin/reset-cache`
 - `POST /api/admin/reset-escalation`
 
+`GET /api/dashboard/configuration` returns masked API key values. Replace or test full key values through the admin key endpoints.
+
 ## Testing
 
 ```bash

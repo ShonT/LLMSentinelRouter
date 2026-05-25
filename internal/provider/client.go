@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -19,6 +20,30 @@ type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 	Name    string `json:"name,omitempty"`
+}
+
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+		Name    string          `json:"name,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.Role = raw.Role
+	m.Name = raw.Name
+	m.Content = ""
+	if len(raw.Content) == 0 || bytes.Equal(bytes.TrimSpace(raw.Content), []byte("null")) {
+		return nil
+	}
+	var content string
+	if err := json.Unmarshal(raw.Content, &content); err == nil {
+		m.Content = content
+		return nil
+	}
+	m.Content = string(bytes.TrimSpace(raw.Content))
+	return nil
 }
 
 type Usage struct {
@@ -42,6 +67,7 @@ type Options struct {
 
 type Client interface {
 	ChatCompletion(ctx context.Context, messages []Message, opts Options) (Response, error)
+	ChatCompletionStream(ctx context.Context, messages []Message, opts Options, handler StreamHandler) (Response, error)
 	Close() error
 }
 
@@ -100,6 +126,36 @@ func (c *HTTPClient) ChatCompletion(ctx context.Context, messages []Message, opt
 	}
 }
 
+func (c *HTTPClient) ChatCompletionStream(ctx context.Context, messages []Message, opts Options, handler StreamHandler) (Response, error) {
+	if handler == nil {
+		return c.ChatCompletion(ctx, messages, opts)
+	}
+	if c.apiKey == "" {
+		return Response{}, fmt.Errorf("%s API key not configured", c.provider)
+	}
+	switch c.provider {
+	case config.ProviderDeepSeek, config.ProviderGroq, config.ProviderOpenRouter:
+		return c.chatOpenAICompatibleStream(ctx, messages, opts, handler)
+	default:
+		bufferedOpts := opts
+		bufferedOpts.Stream = false
+		resp, err := c.ChatCompletion(ctx, messages, bufferedOpts)
+		if err != nil {
+			return resp, err
+		}
+		if resp.Content != "" {
+			if err := handler(StreamChunk{Content: resp.Content}); err != nil {
+				return resp, err
+			}
+		}
+		usage := resp.Usage
+		if err := handler(StreamChunk{Done: true, Usage: &usage}); err != nil {
+			return resp, err
+		}
+		return resp, nil
+	}
+}
+
 func (c *HTTPClient) Close() error {
 	return nil
 }
@@ -153,6 +209,95 @@ func (c *HTTPClient) chatOpenAICompatible(ctx context.Context, messages []Messag
 		Usage:   parsed.Usage,
 		Cost:    c.cost(parsed.Usage.PromptTokens, parsed.Usage.CompletionTokens),
 	}, nil
+}
+
+func (c *HTTPClient) chatOpenAICompatibleStream(ctx context.Context, messages []Message, opts Options, handler StreamHandler) (Response, error) {
+	payload := map[string]any{"model": c.modelID, "messages": messages, "stream": true}
+	if opts.Temperature != nil {
+		payload["temperature"] = *opts.Temperature
+	}
+	if opts.MaxTokens != nil {
+		payload["max_tokens"] = *opts.MaxTokens
+	}
+	headers := map[string]string{"Authorization": "Bearer " + c.apiKey, "Content-Type": "application/json"}
+	if c.provider == config.ProviderOpenRouter {
+		headers["HTTP-Referer"] = c.openRouterRef
+		headers["X-Title"] = c.openRouterName
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return Response{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return Response{}, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return Response{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return Response{}, fmt.Errorf("provider %s returned HTTP %d: %s", c.provider, resp.StatusCode, string(respBody))
+	}
+	var fullContent strings.Builder
+	usage := Usage{}
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+				} `json:"delta"`
+			} `json:"choices"`
+			Usage *Usage `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+		if chunk.Usage != nil {
+			usage = *chunk.Usage
+		}
+		content := ""
+		if len(chunk.Choices) > 0 {
+			content = chunk.Choices[0].Delta.Content
+			if content == "" {
+				content = chunk.Choices[0].Delta.ReasoningContent
+			}
+		}
+		if content == "" {
+			continue
+		}
+		fullContent.WriteString(content)
+		if err := handler(StreamChunk{Content: content}); err != nil {
+			return Response{}, err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return Response{}, err
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	u := usage
+	if err := handler(StreamChunk{Done: true, Usage: &u}); err != nil {
+		return Response{}, err
+	}
+	return Response{Content: fullContent.String(), Model: c.modelID, Usage: usage, Cost: c.cost(usage.PromptTokens, usage.CompletionTokens)}, nil
 }
 
 func (c *HTTPClient) chatAnthropic(ctx context.Context, messages []Message, opts Options) (Response, error) {

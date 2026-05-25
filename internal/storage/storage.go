@@ -171,6 +171,22 @@ func (s *Store) Init(ctx context.Context) error {
 			last_called_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS escalation_traces (
+			trace_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			request_id TEXT,
+			model_used TEXT,
+			complexity_score REAL,
+			impact_scope TEXT,
+			reason TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS app_state (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE INDEX IF NOT EXISTS ix_routing_decisions_session ON routing_decisions(session_id)`,
 		`CREATE INDEX IF NOT EXISTS ix_semantic_cache_entries_hash ON semantic_cache_entries(semantic_hash, created_at)`,
 	}
@@ -364,6 +380,18 @@ func (s *Store) MetricsSummary(ctx context.Context, strongModels map[string]bool
 		summary.EscalationRate = float64(summary.StrongRequests) / float64(summary.RequestsTotal)
 	}
 	return summary, nil
+}
+
+func DataDir(databaseURL string) string {
+	path, err := sqlitePath(databaseURL)
+	if err != nil || path == "" {
+		return "./data"
+	}
+	dir := filepath.Dir(path)
+	if dir == "" || dir == "." {
+		return "./data"
+	}
+	return dir
 }
 
 func sqlitePath(databaseURL string) (string, error) {
